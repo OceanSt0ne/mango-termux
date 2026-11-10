@@ -34,11 +34,14 @@ done
 [[ -f "$PREFIX/include/wordexp.h" ]] || missing="$missing libandroid-wordexp"
 [[ -f "$PREFIX/include/EGL/egl.h" ]] || missing="$missing libglvnd-dev"
 [[ -f "$PREFIX/include/GLES2/gl2.h" ]] || missing="$missing libglvnd-dev"
+# Termux's mesa package ships gbm.pc/libgbm, but gbm.h lives in mesa-dev.
+# Missing it makes scenefx fail with "fatal error: 'gbm.h' file not found".
+[[ -f "$PREFIX/include/gbm.h" ]] || missing="$missing mesa-dev"
 if [[ -n "$missing" ]]; then
   echo "Missing build dependencies:$missing"
   echo "Install e.g.: pkg install clang pkg-config ninja patchelf git python-pip \\"
   echo "  wlroots libwayland libwayland-protocols libxkbcommon libpixman \\"
-  echo "  libdrm libxcb libglvnd-dev mesa littlecms vulkan-loader \\"
+  echo "  libdrm libxcb libglvnd-dev mesa mesa-dev littlecms vulkan-loader \\"
   echo "  pcre2 pango cjson libandroid-wordexp"
   echo "  python -m pip install meson"
   exit 1

@@ -200,7 +200,7 @@ Termux:GUI is no longer used.
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
             wlroots libwayland libwayland-protocols libxkbcommon \
-            libpixman libdrm libxcb libglvnd-dev mesa littlecms \
+            libpixman libdrm libxcb libglvnd-dev mesa mesa-dev littlecms \
             vulkan-loader pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
@@ -221,8 +221,8 @@ You need Android arm64, Termux, and the **Termux:X11** app
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
-  libdrm libxcb libglvnd-dev mesa littlecms vulkan-loader pcre2 \
-  pango cjson libandroid-wordexp
+  libdrm libxcb libglvnd-dev mesa mesa-dev littlecms vulkan-loader \
+  pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
 pkg install x11-repo
@@ -487,6 +487,10 @@ pixman path; use `mango-termux` for effects.
 - `Termux: AHB/EGL renderer unavailable, falling back to pixman` — Android
   system EGL/AHardwareBuffer or the private libraries were not found. Rebuild
   with `./build-termux.sh` (requires `patchelf`) and launch `mango-termux`.
+- `fatal error: 'gbm.h' file not found` — Termux's `mesa` package provides
+  `gbm.pc`/`libgbm`, but the header is in `mesa-dev`. Install it and rerun:
+  `pkg install mesa-dev && ./build-termux.sh`. No need to delete the build
+  directory; the failed target is rebuilt.
 - `X11 error: op 18:0, code 5` — harmless `ChangeProperty` errors when the X11
   backend starts.
 - `Failed to connect to Termux:X11` — check `$TMPDIR/termux-x11.log`, launch

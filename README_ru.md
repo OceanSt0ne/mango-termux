@@ -201,7 +201,7 @@ Termux:GUI больше не используется.
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
             wlroots libwayland libwayland-protocols libxkbcommon \
-            libpixman libdrm libxcb libglvnd-dev mesa littlecms \
+            libpixman libdrm libxcb libglvnd-dev mesa mesa-dev littlecms \
             vulkan-loader pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
@@ -222,8 +222,8 @@ pkg install termux-x11-nightly
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
-  libdrm libxcb libglvnd-dev mesa littlecms vulkan-loader pcre2 \
-  pango cjson libandroid-wordexp
+  libdrm libxcb libglvnd-dev mesa mesa-dev littlecms vulkan-loader \
+  pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
 pkg install x11-repo
@@ -485,6 +485,10 @@ pixman-путём; для эффектов нужен именно `mango-termux
 - `Termux: AHB/EGL renderer unavailable, falling back to pixman` — не найден
   системный EGL/AHardwareBuffer или приватные библиотеки. Пересоберите
   `./build-termux.sh` (нужен `patchelf`) и запускайте `mango-termux`.
+- `fatal error: 'gbm.h' file not found` — пакет Termux `mesa` даёт
+  `gbm.pc`/`libgbm`, а сам заголовок лежит в `mesa-dev`. Установите его и
+  перезапустите сборку: `pkg install mesa-dev && ./build-termux.sh`. Удалять
+  каталог сборки не нужно — упавшая цель пересоберётся.
 - `X11 error: op 18:0, code 5` — безвредные ошибки `ChangeProperty` при
   старте X11-бэкенда.
 - `Failed to connect to Termux:X11` — проверьте лог
