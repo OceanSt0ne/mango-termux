@@ -211,6 +211,36 @@ pkg update
 pkg install termux-x11-nightly
 ```
 
+### Пропатченный wlroots 0.20 (опционально)
+
+Порт собирается против wlroots 0.20. Готовое дерево 0.20.2 с официальными
+Termux-патчами (`shm_open`, пути Xwayland, backend Termux:GUI) лежит здесь:
+<https://github.com/OceanSt0ne/wlroots-termux>. Установите его до сборки mango,
+если нужны эти патчи или замена пакета Termux:
+
+```bash
+pkg install x11-repo
+pkg install meson ninja clang pkg-config patch git \
+  libwayland libwayland-protocols libdrm libxkbcommon libpixman \
+  libglvnd-dev mesa-dev vulkan-loader-generic vulkan-headers glslang \
+  libxcb xcb-util-renderutil xcb-util-wm xwayland littlecms termux-gui-c
+
+git clone https://github.com/OceanSt0ne/wlroots-termux.git ~/Projects/wlroots-0.20
+cd ~/Projects/wlroots-0.20
+chmod 700 /data/data/com.termux/files/lib
+meson setup build --prefix="$PREFIX" \
+  -Dexamples=false -Dxwayland=enabled -Dsession=disabled \
+  -Dbackends=x11,termuxgui -Drenderers=gles2,vulkan -Dwerror=false
+ninja -C build
+ninja -C build install
+pkg-config --modversion wlroots-0.20   # 0.20.2
+```
+
+Termux-патчи уже в коммитах, применять их повторно не нужно. После установки
+пересоберите mango через `./build-termux.sh`, чтобы обновилась приватная копия
+`$PREFIX/lib/mango-termux/libwlroots-0.20.so`. Возврат к пакету Termux:
+`pkg reinstall wlroots`.
+
 `scenefx 0.5` встроен в `scenefx/` и собирается из исходников (см. ниже); в
 репозиториях Termux его нет.
 
