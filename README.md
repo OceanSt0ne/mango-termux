@@ -26,37 +26,6 @@ https://github.com/user-attachments/assets/be85e13f-7798-456d-957e-f8931687392e
 
 > See all layouts in action at [mangowm.github.io](https://mangowm.github.io/)
 
-## Why Mango?
-
-- **Lightweight & fast** — no functionality compromised
-- **Excellent xwayland support** — run X11 apps without friction(Supports scale without blurring)
-- **Tags, not workspaces** — each tag maintains its own independent window layout
-- **Smooth animations** — window open/move/close, tag transitions, layer surfaces
-- **Flexible layouts** — scroller, vertical-scroller, master-stack, monocle, dwindle and more
-- **Rich window states** — swallow, group, minimize, maximize, global, overlay, fakefullscreen
-- **Window effects** — blur, shadow, corner radius, opacity (via scenefx)
-- **Excellent input method support** — text-input v2/v3
-- **Powerful scratchpad** — sway-style scratchpad, special workspace and named-scratchpad support
-- **label jump overview** — see all windows at a glance with easymotion jump label.
-- **Gnome-style application switcher** — quick switching between apps
-- **IPC** — send/receive messages from external programs
-- **Hot-reload config** — no restart needed for keybinding changes
-- **Zero flickering** — every frame is correct
-
-## Vision
-
-**Stability first.** After months of testing, Mango is solid enough for daily use. Breaking changes will be minimal.
-
-**Practicality over novelty.** Features get added when they genuinely improve daily workflows — not for the sake of completeness.
-
-**Focused scope.** Niche requests are evaluated by community interest. Significant upvotes move things forward.
-
-## AI Policy
-
-- **Pull requests:** AI may be used to assist in preparing a pull request (PR), but direct AI-generated PRs are not accepted. Contributors must clearly understand what the code does, whether the implementation is reasonable and rigorous, whether it wastes resources, and whether the implementation is sufficiently convergent rather than scattered.
-
-- **Bug reports:** Using AI to report bugs is acceptable. AI-provided information may serve as reference material, which is preferable to reports that provide no reference information.
-
 ## Installation
 
 [![Packaging status](https://repology.org/badge/vertical-allrepos/mangowm.svg)](https://repology.org/project/mangowm/versions)
