@@ -1,0 +1,506 @@
+[Английский](README.md) | **Русский**
+
+<div align="center">
+  <img src="assets/mango.svg" alt="Логотип Mango" width="120"/>
+
+  <h1>Mango Wayland Compositor</h1>
+
+  <p>Быстрый, многофункциональный Wayland-композитор.</p>
+
+<a href="https://github.com/mangowm/mango/stargazers"><img src="https://img.shields.io/github/stars/mangowm/mango?style=flat&color=orange" alt="Звёзды"/></a>
+<a href="https://github.com/mangowm/mango/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat" alt="Лицензия"/></a>
+<a href="https://repology.org/project/mangowm/versions"><img src="https://repology.org/badge/tiny-repos/mangowm.svg" alt="Пакеты"/></a>
+<a href="https://discord.gg/CPjbDxesh5"><img src="https://img.shields.io/discord/1430889676264177687?style=flat&logo=discord&label=discord" alt="Discord"/></a>
+
+</div>
+
+---
+
+https://github.com/user-attachments/assets/bb83004a-0563-4b48-ad89-6461a9b78b1f
+
+https://github.com/user-attachments/assets/be85e13f-7798-456d-957e-f8931687392e
+
+> **Порт для Termux/Android:** mango работает внутри Termux:X11 с аппаратными
+> эффектами (blur, тени, скруглённые углы) через Android EGL + AHardwareBuffer.
+> Инструкции по сборке и запуску — в разделе
+> [Termux / Android](#termux--android) ниже.
+
+> Все раскладки в действии: [mangowm.github.io](https://mangowm.github.io/)
+
+## Почему Mango?
+
+- **Лёгкий и быстрый** — без ущерба функциональности
+- **Отличная поддержка xwayland** — запускайте X11-приложения без трения (масштабирование без размытия)
+- **Теги, а не рабочие пространства** — каждый тег сохраняет собственную независимую раскладку окон
+- **Плавные анимации** — открытие/перемещение/закрытие окон, переходы тегов, layer surfaces
+- **Гибкие раскладки** — scroller, vertical-scroller, master-stack, monocle, dwindle и другие
+- **Богатые состояния окон** — swallow, group, minimize, maximize, global, overlay, fakefullscreen
+- **Эффекты окон** — blur, тени, скругление углов, прозрачность (через scenefx)
+- **Отличная поддержка методов ввода** — text-input v2/v3
+- **Мощный scratchpad** — scratchpad в стиле sway, special workspace и named-scratchpad
+- **Обзор с jump-label** — все окна сразу, с метками easymotion.
+- **Переключатель приложений в стиле GNOME** — быстрое переключение между приложениями
+- **IPC** — отправка и приём сообщений из внешних программ
+- **Горячая перезагрузка конфига** — изменения привязок без перезапуска
+- **Без мерцания** — каждый кадр корректен
+
+## Видение
+
+**Стабильность прежде всего.** После месяцев тестирования Mango достаточно надёжен для повседневного использования. Критических изменений будет минимум.
+
+**Практичность важнее новизны.** Функции добавляются, когда они действительно улучшают ежедневные сценарии, а не ради полноты.
+
+**Сфокусированный охват.** Узкие запросы оцениваются по интересу сообщества. Значительное число голосов двигает их вперёд.
+
+## Политика использования ИИ
+
+- **Pull requests:** ИИ можно использовать для помощи в подготовке pull request (PR), но прямые PR, сгенерированные ИИ, не принимаются. Авторы должны ясно понимать, что делает код, разумна ли и строга ли реализация, не расходует ли она лишние ресурсы и достаточно ли решение цельное, а не разрозненное.
+
+- **Сообщения об ошибках:** использовать ИИ для сообщения об ошибках допустимо. Информация от ИИ может служить справочным материалом; это предпочтительнее отчётов без ссылок.
+
+## Установка
+
+[![Статус пакетов](https://repology.org/badge/vertical-allrepos/mangowm.svg)](https://repology.org/project/mangowm/versions)
+
+### Arch Linux
+
+```bash
+yay -S mangowm-git
+```
+#### используйте мой конфиг
+- установите зависимости
+```
+yay -S rofi foot xdg-desktop-portal-wlr swaybg waybar wl-clip-persist cliphist wl-clipboard wlsunset xfce-polkit swaync pamixer wlr-dpms sway-audio-idle-inhibit-git swayidle dimland-git brightnessctl swayosd wlr-randr grim slurp satty swaylock-effects-git wlogout sox
+```
+- склонируйте конфиг
+```
+git clone https://github.com/DreamMaoMao/mango-config.git ~/.config/mango
+```
+
+### Другие дистрибутивы
+
+См. [руководство по установке](https://mangowm.github.io/docs/installation) для Fedora, Gentoo, Guix, NixOS, openSUSE, PikaOS, AerynOS, а также для сборки из исходников.
+
+## Документация
+
+- **[mangowm.github.io](https://mangowm.github.io/)** — документация на сайте: справочник по конфигурации, привязки клавиш, раскладки, IPC и другое
+- **[GitHub Wiki](https://github.com/mangowm/mango/wiki/)** — вики, поддерживаемая сообществом
+
+## Сообщество
+
+Присоединяйтесь к нам в **[Discord](https://discord.gg/CPjbDxesh5)**
+
+## Благодарности
+
+- [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) — реализация протоколов Wayland
+- [dwl](https://codeberg.org/dwl/dwl) — основа, на которой построен Mango
+- [scenefx](https://github.com/wlrfx/scenefx) — библиотека эффектов окон
+- [owl](https://github.com/dqrk0jeste/owl) — основа для анимаций
+- [sway](https://github.com/swaywm/sway) — справочная реализация протоколов
+
+## Спонсоры
+
+Если Mango делает ваш рабочий стол лучше, поддержите его разработку.
+
+Спасибо всем, кто поддержал проект:
+
+<table>
+  <tr>
+    <!-- добавляйте новых спонсоров сюда: скопируйте блок <td>...</td> ниже -->
+    <td align="center">
+      <a href="https://github.com/dl09r">
+        <img src="https://unavatar.io/github/dl09r" width="48" style="border-radius:50%"/><br/>
+        <sub>dl09r</sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/tonybanters">
+        <img src="https://unavatar.io/github/tonybanters" width="48" style="border-radius:50%"/><br/>
+        <sub>tonybanters</sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/vinthara">
+        <img src="https://unavatar.io/github/vinthara" width="48" style="border-radius:50%"/><br/>
+        <sub>vinthara</sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/stepbrobd">
+        <img src="https://unavatar.io/github/stepbrobd" width="48" style="border-radius:50%"/><br/>
+        <sub>stepbrobd</sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+Принимаются криптовалютные пожертвования:
+
+<table>
+  <tr>
+    <td valign="middle">
+      <strong>Сеть:</strong> BEP20 (BSC)<br/>
+      <strong>Адрес:</strong> <code>0xf9cda472f2556671d2504afc4c35340ec5615da1</code>
+    </td>
+    <td valign="middle">
+      <img width="120" alt="QR-код спонсора" src="assets/crypto_sponserme_qrcode.png" />
+    </td>
+  </tr>
+</table>
+
+---
+
+## Termux / Android
+
+Адаптация [mango](https://github.com/mangowm/mango) для Android/Termux.
+Композитор работает как обычное приложение X11 внутри **Termux:X11**
+(`termux-x11` + приложение `com.termux.x11`) и использует нативный бэкенд
+wlroots `wlr_x11_backend`.
+
+Termux:GUI больше не используется.
+
+### Что изменено в исходниках
+
+- `meson_options.txt` — опция `termux` (по умолчанию `true`).
+- `meson.build` — в режиме `termux`:
+  - не требуется `libinput` и `wlr/backend/session.h`;
+  - подключаются заголовки-заглушки из `termux-compat/`;
+  - линкуется `libandroid-wordexp` (в bionic нет `wordexp(3)`);
+  - конфиги ставятся в `$PREFIX/etc/mango`.
+- `termux-compat/libinput.h`, `termux-compat/wlr/backend/libinput.h`,
+  `termux-compat/wlr/backend/session.h`,
+  `termux-compat/wlr/types/wlr_drm_lease_v1.h` — заглушки отсутствующих в
+  Termux-сборке wlroots интерфейсов.
+- `src/main.c`:
+  - выбор бэкенда `x11` (по умолчанию), `wayland`, `headless`;
+  - в Termux по умолчанию используется `WLR_BACKENDS=x11`;
+  - `mango_renderer_create()`: при наличии DRM/DMA-BUF (DRI3) берётся
+    FX-рендерер scenefx; иначе в Termux пробует системный Android EGL +
+    AHardwareBuffer (Adreno), а при неудаче — `pixman`.
+- `src/manage/monitor.c` — пересоздание рендерера при GPU reset идёт через тот
+  же `mango_renderer_create()` и `mango_allocator_create()`.
+- `mangonag/mangonag.c` — `memfd_create` через `syscall()` для API < 30.
+- `termux/ahb.c`, `termux/ahb.h` — AHardwareBuffer-аллокатор и буферы,
+  системный Android EGL/GLES, EGLImage-провайдер для scenefx и отдача
+  GPU-буфера в X11 через SHM. Так эффекты работают без DRI3.
+- `scenefx/` — исходники scenefx 0.5 с уже применённым
+  Termux/AHardwareBuffer-патчем.
+- `termux-compat/scenefx-termux.patch` — патч scenefx: pixman-fallback,
+  поддержка внешнего EGLImage-провайдера (AHardwareBuffer), работа без
+  `EGL_EXT_image_dma_buf_import` и `EGL_EXT_platform_base`.
+- `build-termux.sh` — сборка встроенного scenefx с патчем + mango, а также
+  приватные GPU-копии `mango`/`libwlroots`/`libscenefx` в
+  `$PREFIX/lib/mango-termux`.
+- `run-mango.sh` — запуск Termux:X11 (если не запущен) и mango в X11.
+  Устанавливается в `$PREFIX/bin/mango-termux`.
+- `termux/x11-check.c` — маленький пробник (`mango-x11-check`), который
+  проверяет X11-соединение настоящим handshake, а не наличием файла сокета.
+
+### Зависимости
+
+```bash
+pkg install clang pkg-config ninja patchelf git python-pip \
+            wlroots libwayland libwayland-protocols libxkbcommon \
+            libpixman libdrm libxcb libglvnd-dev mesa littlecms \
+            vulkan-loader pcre2 pango cjson libandroid-wordexp
+python -m pip install meson
+
+# сервер Termux:X11
+pkg install x11-repo
+pkg update
+pkg install termux-x11-nightly
+```
+
+`scenefx 0.5` встроен в `scenefx/` и собирается из исходников (см. ниже); в
+репозиториях Termux его нет.
+
+### Быстрый старт
+
+Нужны Android arm64, Termux и приложение **Termux:X11**
+(`com.termux.x11`).
+
+```bash
+pkg install clang pkg-config ninja patchelf git python-pip \
+  wlroots libwayland libwayland-protocols libxkbcommon libpixman \
+  libdrm libxcb libglvnd-dev mesa littlecms vulkan-loader pcre2 \
+  pango cjson libandroid-wordexp
+python -m pip install meson
+
+pkg install x11-repo
+pkg update
+pkg install termux-x11-nightly
+
+# склонируйте ветку порта, например:
+# git clone -b termux-port <URL> ~/Projects/mango-termux
+cd ~/Projects/mango-termux
+./build-termux.sh
+mango-termux
+```
+
+Для нового конфига эффекты включаются автоматически; если конфиг уже
+существовал, включите их вручную (см. раздел «Эффекты»). Запускайте именно
+`mango-termux`: обычный `mango` остаётся pixman-путём.
+
+### Сборка
+
+Всё автоматизировано. Скрипт можно запускать из любого каталога — по
+абсолютному пути, относительному пути или через симлинк:
+
+```bash
+cd ~/Projects/mango-termux
+./build-termux.sh
+```
+
+Скрипт:
+
+1. собирает встроенный scenefx 0.5 с уже применённым патчем из `scenefx/`
+   (или из `$SCENEFX_DIR`);
+2. собирает и устанавливает scenefx и mango в `$PREFIX`;
+3. создаёт приватные GPU-копии в `$PREFIX/lib/mango-termux`, перенаправляя
+   `libEGL`/`libGLESv2` на системные Android-библиотеки через `patchelf`;
+4. копирует конфиг в `~/.config/mango` (для нового конфига сразу включает
+   `blur`, тени и скругления).
+
+Если `scenefx` уже лежит в другом месте:
+
+```bash
+SCENEFX_DIR=/path/to/scenefx ./build-termux.sh
+```
+
+Если `$SCENEFX_DIR` указывает на git-дерево без патча, скрипт применит
+`termux-compat/scenefx-termux.patch` автоматически.
+
+Флаг `-Dtermux=true` уже используется скриптом. Ручная сборка ниже даёт
+обычную Mesa/pixman-сборку; для GPU-эффектов нужен `./build-termux.sh`.
+
+```bash
+# scenefx (встроен, патч уже применён)
+cd ~/Projects/mango-termux/scenefx
+chmod 700 /data/data/com.termux/files/lib
+meson setup build --prefix="$PREFIX" -Dexamples=false -Dwerror=false
+meson compile -C build && meson install -C build
+chmod 000 /data/data/com.termux/files/lib
+
+# mango
+cd ~/Projects/mango-termux
+chmod 700 /data/data/com.termux/files/lib
+meson setup build --prefix="$PREFIX" -Dtermux=true -Dxwayland=disabled
+meson compile -C build && meson install -C build
+chmod 000 /data/data/com.termux/files/lib
+```
+
+Проверка:
+
+```bash
+mango -v
+mango -p -c ~/.config/mango/config.conf
+```
+
+### Запуск
+
+Приложение **Termux:X11** (`com.termux.x11`) должно быть установлено. Пакет
+`termux-x11-nightly` уже содержит сервер.
+
+```bash
+mango-termux
+```
+
+`mango-termux` — это установленная копия `run-mango.sh`, поэтому её можно
+запускать из любого каталога и после любого перезапуска Termux.
+
+Скрипт:
+
+- выставляет `XDG_RUNTIME_DIR` (если не задан) в `$TMPDIR` и права `700`;
+- использует `DISPLAY=:0` (переопределяется через `MANGO_X11_DISPLAY`);
+- проверяет, что X-сервер на этом дисплее реально отвечает
+  (`mango-x11-check`), а не просто существует файл сокета;
+- если сервер не отвечает, стартует `termux-x11 "$DISPLAY" -ac -noreset`,
+  ждёт соединения; при застарелом lock/socket убирает их и пробует ещё раз;
+- выставляет `WLR_BACKENDS=x11`;
+- запускает `$PREFIX/lib/mango-termux/mango` (GPU-эффекты), а если его нет —
+  установленный `mango`, `./build/mango` или `$MANGO_BIN`.
+
+Полезные варианты:
+
+```bash
+# подробный лог
+mango-termux -d
+
+# другой дисплей
+MANGO_X11_DISPLAY=:1 mango-termux
+
+# свой конфиг
+mango-termux -c ~/.config/mango/config.conf
+
+# стартовая команда
+mango-termux -s foot
+
+# перезапустить уже работающий mango
+mango-termux --restart
+```
+
+### Повторный запуск после перезахода в Termux
+
+Скрипт можно запускать повторно сколько угодно раз:
+
+- если mango ещё работает (Termux не убил процесс), `mango-termux` найдёт его
+  IPC-сокет `$XDG_RUNTIME_DIR/mango-*.sock`, проверит через `mmsg get version`
+  и ничего не запустит повторно;
+- если mango был убит, а wayland-сокеты остались, `mango-termux` удалит
+  застарелые `wayland-*.lock`/сокеты (живой композитор держит `flock`);
+- если Termux:X11 был убит и остался `.X0-lock`/сокет, скрипт проверит
+  соединение, уберёт мёртвый lock и поднимет сервер заново;
+- при необходимости принудительно заменить работающий экземпляр:
+  `mango-termux --restart`.
+
+#### Автозапуск при открытии Termux (необязательно)
+
+Если нужно, чтобы mango поднимался сам при каждом новом интерактивном shell,
+добавьте в конфиг shell проверку маркер-файла. Создайте маркер:
+
+```bash
+mkdir -p ~/.config/mango
+touch ~/.config/mango/autostart
+```
+
+Для bash (`~/.bashrc`):
+
+```bash
+if [[ $- == *i* && -f "$HOME/.config/mango/autostart" ]]; then
+  nohup mango-termux >/dev/null 2>&1 &
+fi
+```
+
+Для fish (`~/.config/fish/config.fish`):
+
+```fish
+if status is-interactive; and test -f "$HOME/.config/mango/autostart"
+    nohup mango-termux >/dev/null 2>&1 &
+end
+```
+
+Убрать автозапуск: `rm ~/.config/mango/autostart`.
+
+Если запускать `mango` напрямую, переменные нужно выставить самому:
+
+```bash
+export XDG_RUNTIME_DIR="$TMPDIR"
+export DISPLAY=:0
+export WLR_BACKENDS=x11
+mango
+```
+
+### Конфигурация
+
+Файлы ставятся в `$PREFIX/etc/mango/`. Mango ищет конфиг в порядке:
+
+1. `~/.config/mango/config.conf`
+2. `~/.config/mango/config.toml`
+3. `$PREFIX/etc/mango/config.conf`
+4. `$PREFIX/etc/mango/config.toml`
+
+Горячие клавиши по умолчанию (`config.conf`):
+
+| Комбинация | Действие |
+|---|---|
+| `Super+M` | выход из mango |
+| `Alt+Return` | запустить `foot` |
+| `Alt+Space` | `rofi -show drun` |
+| `Super+R` | перечитать конфиг |
+| `Alt+Q` | закрыть окно |
+| `Super+Tab` | следующее окно |
+| `Alt+Tab` | переключение jump-label |
+| `Alt+F` | fullscreen |
+
+`foot` и `rofi` нужно установить отдельно (`pkg install foot rofi`).
+
+### Как это работает
+
+`wlr_x11_backend` создаёт окно внутри X-сервера Termux:X11, принимает от него
+клавиатуру, указатель и touch. Клиенты подключаются к mango по Wayland-сокету
+(`$XDG_RUNTIME_DIR/wayland-0`):
+
+```bash
+export XDG_RUNTIME_DIR="$TMPDIR"
+export WAYLAND_DISPLAY=wayland-0
+foot
+```
+
+Рендеринг:
+
+- при рабочем DRI3 (`wlr_backend_get_drm_fd() >= 0`) используется FX-рендерер
+  scenefx;
+- в Termux:X11 `DRI3Open` не отдаёт DRM-fd, поэтому `mango-termux` запускает
+  приватную сборку, которая создаёт FX-рендерер scenefx на **системном
+  Android EGL** (Adreno) и рендерит в **AHardwareBuffer**. Буфер отдаётся
+  X11-серверу через SHM с учётом выровненного stride;
+- если системный EGL/AHardwareBuffer недоступен, автоматически включается
+  `pixman` и scenefx рисует сцену без эффектов.
+
+### Эффекты
+
+Эффекты включаются в `~/.config/mango/config.conf` (или `config.toml`):
+
+```ini
+blur=1
+blur_layer=1
+shadows=1
+layer_shadows=1
+border_radius=12
+```
+
+При запуске через `mango-termux` они работают на GPU (blur, тени, скруглённые
+углы, анимации). Проверить, что выбран GPU-путь:
+
+```bash
+MANGO_TERMUX_GPU=1 mango-termux --restart -d 2>&1 | grep -E 'AHB|FX renderer|pixman'
+```
+
+Принудительно вернуться к pixman (без эффектов, для диагностики):
+
+```bash
+MANGO_TERMUX_GPU=0 mango-termux
+```
+
+Прямой запуск `$PREFIX/bin/mango` использует Termux-Mesa и остаётся
+pixman-путём; для эффектов нужен именно `mango-termux`.
+
+### Ограничения
+
+- В Termux нет DRM/libinput/session-бэкендов — так собран `wlroots-0.20`.
+- Termux:X11 не отдаёт DRI3 DRM-fd. Эффекты работают через системный Android
+  EGL + AHardwareBuffer, а не через DRI3. Это требует Android с рабочим
+  `/system/lib64/libEGL.so` и поддержкой AHardwareBuffer; иначе — pixman.
+- На очень больших разрешениях копирование AHB в SHM для X11 может быть
+  узким местом.
+- XWayland в этой сборке отключён (`-Dxwayland=disabled`), X11-приложения
+  напрямую не запустятся.
+- `chvt`/переключение виртуальных терминалов недоступно.
+
+### Диагностика
+
+- `Failed to open DRI3` / `Disabling DMA-BUF support` — нормально для
+  Termux:X11. `mango-termux` не использует DRI3: эффекты идут через
+  системный Android EGL + AHardwareBuffer.
+- `Termux: AHB/EGL renderer unavailable, falling back to pixman` — не найден
+  системный EGL/AHardwareBuffer или приватные библиотеки. Пересоберите
+  `./build-termux.sh` (нужен `patchelf`) и запускайте `mango-termux`.
+- `X11 error: op 18:0, code 5` — безвредные ошибки `ChangeProperty` при
+  старте X11-бэкенда.
+- `Failed to connect to Termux:X11` — проверьте лог
+  `$TMPDIR/termux-x11.log`, запустите приложение Termux:X11 вручную и
+  проверьте соединение: `DISPLAY=:0 mango-x11-check; echo $?`.
+- Чёрный/пустой экран — убедитесь, что открыто приложение Termux:X11;
+  запускайте через `run-mango.sh -d` и смотрите лог.
+- Медленно — уменьшите разрешение экрана Termux:X11 или отключите анимации
+  в `config.conf`.
+- `couldn't create renderer` — проверьте, что scenefx собран с патчем
+  `scenefx-termux.patch` и установлен в `$PREFIX`, а `mango-termux`
+  использует `$PREFIX/lib/mango-termux/mango`.
+
+### Пересборка
+
+```bash
+cd ~/Projects/mango-termux
+./build-termux.sh
+```

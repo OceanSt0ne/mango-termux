@@ -1,0 +1,337 @@
+project('mango', ['c'],
+  version : '0.18.5',
+)
+
+subdir('protocols')
+
+is_nixos = false
+os_release = run_command('cat', '/etc/os-release', check: false)
+if os_release.returncode() == 0
+    if os_release.stdout().contains('ID=nixos')
+        is_nixos = true
+    endif
+endif
+
+prefix = get_option('prefix')
+sysconfdir = get_option('sysconfdir')
+
+# If sysconfdir starts with prefix, strip the prefix.
+if sysconfdir.startswith(prefix) and not is_nixos
+  sysconfdir = sysconfdir.substring(prefix.length())
+  # Ensure sysconfdir is an absolute path.
+  if not sysconfdir.startswith('/')
+    sysconfdir = '/' + sysconfdir
+  endif
+endif
+
+cc = meson.get_compiler('c')
+libm = cc.find_library('m')
+libdrm = dependency('libdrm')
+xcb = dependency('xcb', required : get_option('xwayland'))
+xlibs = dependency('xcb-icccm', required : get_option('xwayland'))
+xcb_randr = dependency('xcb-randr', required : get_option('xwayland'))
+wayland_server_dep = dependency('wayland-server',version: '>=1.23.1')
+wlroots_dep = dependency('wlroots-0.20',version: '>=0.20.0')
+xkbcommon_dep = dependency('xkbcommon')
+# Termux's wlroots build ships without the libinput backend. On Termux we use
+# the compatibility headers under termux-compat/ instead of the libinput
+# dependency (see termux-compat/libinput.h).
+termux_build = get_option('termux')
+if not termux_build
+  libinput_dep = dependency('libinput',version: '>=1.27.1')
+else
+  # bionic has no wordexp(3); Termux ships a replacement library.
+  wordexp_dep = cc.find_library('android-wordexp')
+  # The Termux build uses the X11 backend even with xwayland disabled, so
+  # libxcb is required for the output window setup.
+  xcb = dependency('xcb')
+endif
+libwayland_client_dep = dependency('wayland-client')
+pcre2_dep = dependency('libpcre2-8')
+libscenefx_dep = dependency('scenefx-0.5',version: '>=0.5.0')
+pixman_dep = dependency('pixman-1')
+cjson_dep = dependency('libcjson')
+pangocairo_dep = dependency('pangocairo')
+
+# version info
+git = find_program('git', required : false)
+is_git_repo = false
+
+# check if current directory is a git repo
+if git.found()
+  git_status = run_command(git, 'rev-parse', '--is-inside-work-tree', check : false)
+  if git_status.returncode() == 0 and git_status.stdout().strip() == 'true'
+    is_git_repo = true
+  endif
+endif
+
+if is_git_repo
+  # if current directory is a git repo, get commit hash and latest tag
+  commit_hash = run_command(git, 'rev-parse', '--short', 'HEAD', check : false).stdout().strip()
+  latest_tag = meson.project_version()
+  version_with_hash = '@0@(@1@)'.format(latest_tag, commit_hash)
+else
+  # if not a git repo, use project version and "release" string
+  commit_hash = 'release'
+  latest_tag = meson.project_version()
+  version_with_hash = '@0@(@1@)'.format(latest_tag, commit_hash)
+endif
+
+# Termux installs its config under $PREFIX/etc, so the runtime lookup must
+# follow it instead of the host /etc.
+if get_option('termux')
+  mango_sysconfdir = join_paths(prefix, 'etc')
+else
+  mango_sysconfdir = '/etc'
+endif
+
+# define compilation args
+c_args = [
+  '-g',
+  '-O2',
+  '-U_FORTIFY_SOURCE',
+  '-Wno-unused-function',
+  '-Wno-unused-parameter',
+  '-Wno-unused-result',
+  '-DWLR_USE_UNSTABLE',
+  '-D_POSIX_C_SOURCE=200809L',
+  '-DVERSION="@0@"'.format(version_with_hash),
+  '-DSYSCONFDIR="@0@"'.format(mango_sysconfdir),
+]
+
+# add debug args only when debug option is enabled
+if get_option('asan')
+  c_args += [
+    '-fsanitize=address',
+    '-fno-omit-frame-pointer',
+    '-fno-optimize-sibling-calls'
+  ]
+endif
+
+if xcb.found() and xlibs.found()
+  c_args += '-DXWAYLAND'
+endif
+
+if get_option('termux')
+  c_args += '-DTERMUX_BUILD'
+endif
+
+# define link args
+link_args = []
+if get_option('asan')
+  link_args += '-fsanitize=address'
+endif
+
+# Auto-include every .c file under src/ (recursively) so new source files
+# are picked up at `meson setup` time without editing this file.
+# NOTE: mmsg/mmsg.c lives outside src/ on purpose (separate binary, own main()).
+find = find_program('find')
+mango_sources = files(run_command(find, 'src', '-name', '*.c', check: true).stdout().split())
+
+mango_inc = include_directories('.', 'include')
+if termux_build
+  mango_inc = [mango_inc, include_directories('termux-compat')]
+endif
+
+mango_deps = [
+    libm,
+    libdrm,
+    xcb,
+    xlibs,
+    xcb_randr,
+    libscenefx_dep,
+    wayland_server_dep,
+    wlroots_dep,
+    xkbcommon_dep,
+    libwayland_client_dep,
+    pcre2_dep,
+    pixman_dep,
+    cjson_dep,
+    pangocairo_dep,
+]
+if not termux_build
+  mango_deps += libinput_dep
+else
+  mango_deps += wordexp_dep
+  mango_sources += files('termux/ahb.c')
+  mango_deps += [
+    cc.find_library('android', required : true),
+    cc.find_library('EGL', required : true),
+  ]
+endif
+
+executable('mango',
+  mango_sources,
+
+  wayland_sources,
+  include_directories : mango_inc,
+  dependencies : mango_deps,
+  install : true,
+  c_args : c_args,
+  link_args : link_args,
+)
+
+# build mmsg
+
+wayland_scanner_client_header = generator(
+  wayland_scanner,
+  output: '@BASENAME@-protocol.h',
+  arguments: ['client-header', '@INPUT@', '@OUTPUT@']
+)
+
+wayland_scanner_private_code = generator(
+  wayland_scanner,
+  output: '@BASENAME@-protocol.c',
+  arguments: ['private-code', '@INPUT@', '@OUTPUT@']
+)
+
+# use generator in mmsg target
+executable('mmsg',
+  'mmsg/mmsg.c',
+  'src/config/error_store.c',
+  'src/common/log.c',
+  'src/common/util.c',
+
+  wayland_sources,
+
+  include_directories : mango_inc,
+
+  dependencies: [
+    libwayland_client_dep,
+    wlroots_dep,
+    pcre2_dep,
+  ],
+
+  install: true,
+
+  c_args: [
+    '-g',
+    '-O2',
+    '-U_FORTIFY_SOURCE',
+    '-Wno-unused-function',
+    '-Wno-unused-parameter',
+    '-DWLR_USE_UNSTABLE',
+    '-D_POSIX_C_SOURCE=200809L',
+  ],
+)
+
+# build mangonag (layer-shell nag/notification client)
+
+mangonag_proto_h = custom_target('mangonag-layer-shell-client-proto',
+  input : 'protocols/wlr-layer-shell-unstable-v1.xml',
+  output : 'wlr-layer-shell-unstable-v1-client-protocol.h',
+  command : [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+mangonag_proto_c = custom_target('mangonag-layer-shell-private-code',
+  input : 'protocols/wlr-layer-shell-unstable-v1.xml',
+  output : 'wlr-layer-shell-unstable-v1-protocol.c',
+  command : [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+mangonag_xdg_proto_h = custom_target('mangonag-xdg-shell-client-proto',
+  input : wl_protocol_dir + '/stable/xdg-shell/xdg-shell.xml',
+  output : 'xdg-shell-client-protocol.h',
+  command : [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@'],
+)
+
+mangonag_xdg_proto_c = custom_target('mangonag-xdg-shell-private-code',
+  input : wl_protocol_dir + '/stable/xdg-shell/xdg-shell.xml',
+  output : 'xdg-shell-protocol.c',
+  command : [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
+)
+
+executable('mangonag',
+  'mangonag/mangonag.c',
+  mangonag_proto_h,
+  mangonag_proto_c,
+  mangonag_xdg_proto_h,
+  mangonag_xdg_proto_c,
+
+  include_directories : mango_inc,
+
+  dependencies: [
+    libwayland_client_dep,
+    pangocairo_dep,
+  ],
+
+  install: true,
+
+  c_args: [
+    '-g',
+    '-O2',
+    '-U_FORTIFY_SOURCE',
+    '-Wno-unused-function',
+    '-Wno-unused-parameter',
+    '-DWLR_USE_UNSTABLE',
+    '-D_POSIX_C_SOURCE=200809L',
+  ],
+)
+
+mandir = get_option('mandir')
+desktop_install_dir = join_paths(prefix, 'share/wayland-sessions')
+portal_install_dir = join_paths(prefix, 'share/xdg-desktop-portal')
+if get_option('termux')
+  mango_config_install_dir = join_paths(prefix, 'etc/mango')
+else
+  mango_config_install_dir = join_paths(sysconfdir, 'mango')
+endif
+install_data('assets/mango.desktop', install_dir : desktop_install_dir)
+install_data('assets/mango-portals.conf', install_dir : portal_install_dir)
+install_data('assets/config.conf', install_dir : mango_config_install_dir)
+install_data('assets/config.toml', install_dir : mango_config_install_dir)
+
+# Ship mango-session.target so that systemd user services declaring
+# WantedBy=graphical-session.target (portals, panels, ...) are started together
+# with the session. mango activates the target itself, see
+# set_activation_env() in src/main.c
+install_data('assets/mango-session.target',
+  install_dir : join_paths(prefix, 'lib/systemd/user'))
+
+# generate the mmsg man page at build time so the version always
+# matches the project version
+mmsg_man_conf = configuration_data()
+mmsg_man_conf.set('VERSION', meson.project_version())
+install_data(
+  configure_file(
+    input : 'mmsg/mmsg.1.in',
+    output : 'mmsg.1',
+    configuration : mmsg_man_conf,
+  ),
+  install_dir : join_paths(mandir, 'man1'),
+)
+
+# generate the mangonag man page at build time so the version always
+# matches the project version
+mangonag_man_conf = configuration_data()
+mangonag_man_conf.set('VERSION', meson.project_version())
+install_data(
+  configure_file(
+    input : 'mangonag/mangonag.1.in',
+    output : 'mangonag.1',
+    configuration : mangonag_man_conf,
+  ),
+  install_dir : join_paths(mandir, 'man1'),
+)
+
+if get_option('termux')
+  # Small connectivity probe used by run-mango.sh to tell a live Termux:X11
+  # server from a stale socket left behind after the Termux app restarts.
+  executable('mango-x11-check', 'termux/x11-check.c',
+    dependencies : [xcb],
+    install : true,
+    c_args : [
+      '-g',
+      '-O2',
+      '-D_POSIX_C_SOURCE=200809L',
+    ],
+  )
+
+  # Install the launcher into $PATH so it can be used from any shell after
+  # re-entering Termux: `mango-termux`.
+  install_data('run-mango.sh',
+    install_dir : get_option('bindir'),
+    rename : 'mango-termux',
+    install_mode : 'rwxr-xr-x',
+  )
+endif

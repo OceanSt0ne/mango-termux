@@ -1,0 +1,5 @@
+option('xwayland', type : 'feature', value : 'enabled')
+option('asan', type : 'boolean', value : false)
+# Android/Termux build: drops the libinput dependency and uses the wlroots
+# X11 backend (Termux:X11), with nested Wayland/headless as fallbacks.
+option('termux', type : 'boolean', value : true)

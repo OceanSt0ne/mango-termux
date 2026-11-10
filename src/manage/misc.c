@@ -1,0 +1,869 @@
+#include "mango/manage/misc.h"
+#include "mango/common/log.h"
+#include "mango/common/scene_node.h"
+#include "mango/common/server.h"
+#include "mango/common/util.h"
+#include "mango/data/static_keymap.h"
+#include "mango/input/pointer.h"
+#include "mango/layout/arrange.h"
+#include "mango/manage/client.h"
+#include "mango/manage/layer.h"
+#include "mango/manage/monitor.h"
+
+#include <ctype.h>
+#include <drm_fourcc.h>
+#include <scenefx/types/wlr_scene.h>
+#include <wlr/backend/session.h>
+#include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_data_device.h>
+#include <wlr/types/wlr_drm_lease_v1.h>
+#include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
+#include <wlr/types/wlr_ext_image_capture_source_v1.h>
+#include <wlr/types/wlr_ext_image_copy_capture_v1.h>
+#include <wlr/types/wlr_idle_inhibit_v1.h>
+#include <wlr/types/wlr_idle_notify_v1.h>
+#include <wlr/types/wlr_layer_shell_v1.h>
+#include <wlr/types/wlr_output.h>
+#include <wlr/types/wlr_primary_selection.h>
+#include <wlr/types/wlr_seat.h>
+#include <wlr/types/wlr_session_lock_v1.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
+
+typedef struct SessionLock {
+	struct wlr_scene_tree *scene;
+
+	struct wlr_session_lock_v1 *lock;
+	struct wl_listener new_surface;
+	struct wl_listener unlock;
+	struct wl_listener destroy;
+} SessionLock;
+
+struct capture_session_tracker {
+	struct wl_listener session_destroy;
+	struct wlr_ext_image_copy_capture_session_v1 *session;
+};
+
+static const LayoutMapping layout_mappings[] = {
+	{"English (US)", "us"},
+	{"English (UK)", "gb"},
+	{"Russian", "ru"},
+	{"German", "de"},
+	{"French", "fr"},
+	{"Spanish", "es"},
+	{"Italian", "it"},
+	{"Japanese", "jp"},
+	{"Chinese", "cn"},
+	{"Korean", "kr"},
+	{"Arabic", "ar"},
+	{"Hebrew", "il"},
+	{"Greek", "gr"},
+	{"Turkish", "tr"},
+	{"Portuguese", "pt"},
+	{"Portuguese (Brazil)", "br"},
+	{"Swedish", "se"},
+	{"Norwegian", "no"},
+	{"Danish", "dk"},
+	{"Finnish", "fi"},
+	{"Polish", "pl"},
+	{"Czech", "cz"},
+	{"Hungarian", "hu"},
+	{"Ukrainian", "ua"},
+	{"Belarusian", "by"},
+	{"Bulgarian", "bg"},
+	{"Croatian", "hr"},
+	{"Romanian", "ro"},
+	{"Serbian", "rs"},
+	{"Slovak", "sk"},
+	{"Slovenian", "si"},
+	{"Estonian", "ee"},
+	{"Latvian", "lv"},
+	{"Lithuanian", "lt"},
+	{"Dutch", "nl"},
+	{"Flemish", "be"},
+	{"Swiss German", "ch"},
+	{"French (Canada)", "ca"},
+	{"French (Switzerland)", "ch-fr"},
+	{"Icelandic", "is"},
+	{"Maltese", "mt"},
+	{"Irish", "ie"},
+	{"Albanian", "al"},
+	{"Macedonian", "mk"},
+	{"Bosnian", "ba"},
+	{"Montenegrin", "me"},
+	{"Dvorak", "dv"},
+	{"Colemak", "cm"},
+	{"Workman", "wm"},
+	{"Norman", "nm"},
+	{"QGMLWY", "qg"},
+	{"AZERTY", "az"},
+	{"QWERTZ", "qz"},
+	{"BÉPO (French ergonomic)", "bepo"},
+	{"Neo", "neo"},
+	{"Turkish F", "trf"},
+	{"Tibetan", "bo"},
+	{"Thai", "th"},
+	{"Vietnamese", "vn"},
+	{"Lao", "la"},
+	{"Khmer", "kh"},
+	{"Hindi", "in"},
+	{"Persian", "ir"},
+	{"Urdu", "pk"},
+	{"Bangla", "bd"},
+	{"Sinhala", "lk"},
+	{"Nepali", "np"},
+	{"Tamil", "ta"},
+	{"Telugu", "te"},
+	{"Kannada", "kn"},
+	{"Malayalam", "ml"},
+	{NULL, NULL} // End marker.
+};
+
+pid_t get_parent_process(pid_t p) {
+	uint32_t v = 0;
+
+	FILE *f;
+	char buf[256];
+	snprintf(buf, sizeof(buf) - 1, "/proc/%u/stat", (unsigned)p);
+
+	if (!(f = fopen(buf, "r")))
+		return 0;
+
+	// Checks the fscanf return value to ensure one argument was read.
+	if (fscanf(f, "%*u %*s %*c %u", &v) != 1) {
+		fclose(f);
+		return 0;
+	}
+
+	fclose(f);
+
+	return (pid_t)v;
+}
+
+int32_t is_descendant_process(pid_t p, pid_t c) {
+	while (p != c && c != 0)
+		c = get_parent_process(c);
+
+	return (int32_t)c;
+}
+
+void get_layout_abbr(char *abbr, const char *full_name) {
+	// Clears the output buffer.
+	abbr[0] = '\0';
+
+	// 1. Try to find the name in the mapping table.
+	for (int32_t i = 0; layout_mappings[i].full_name != NULL; i++) {
+		if (strcmp(full_name, layout_mappings[i].full_name) == 0) {
+			strcpy(abbr, layout_mappings[i].abbr);
+			return;
+		}
+	}
+
+	// 2. Try to extract from the name and convert to lowercase.
+	const char *open = strrchr(full_name, '(');
+	const char *close = strrchr(full_name, ')');
+	if (open && close && close > open) {
+		uint32_t len = close - open - 1;
+		if (len > 0 && len <= 4) {
+			// Extracts and converts to lowercase.
+			for (uint32_t j = 0; j < len; j++) {
+				abbr[j] = tolower(open[j + 1]);
+			}
+			abbr[len] = '\0';
+			return;
+		}
+	}
+
+	// 3. Take the first 2-3 letters and convert to lowercase.
+	uint32_t j = 0;
+	for (uint32_t i = 0; full_name[i] != '\0' && j < 3; i++) {
+		if (isalpha(full_name[i])) {
+			abbr[j++] = tolower(full_name[i]);
+		}
+	}
+	abbr[j] = '\0';
+
+	// Ensures at least 2 characters.
+	if (j >= 2) {
+		return;
+	}
+
+	// 4. Fallback: use the lowercase first letter.
+	if (j == 1) {
+		abbr[1] = full_name[1] ? tolower(full_name[1]) : '\0';
+		abbr[2] = '\0';
+	} else {
+		// 5. Final fallback: return "xx".
+		strcpy(abbr, "xx");
+	}
+}
+
+Client *client_at_point(double x, double y) {
+	Client *c = NULL, *tmp = NULL;
+	wl_list_for_each_safe(c, tmp, &server.clients, link) {
+		if (VISIBLEON(c, c->mon) && c->animation.current.x <= x &&
+			c->animation.current.y <= y &&
+			c->animation.current.x + c->animation.current.width >= x &&
+			c->animation.current.y + c->animation.current.height >= y) {
+			return c;
+		}
+	}
+	return NULL;
+}
+bool layer_ignores_focus(LayerSurface *l) {
+	if (!l || !l->layer_surface)
+		return true;
+	struct wlr_surface *s = l->layer_surface->surface;
+	return !pixman_region32_not_empty(&s->input_region) ||
+		   l->layer_surface->current.keyboard_interactive ==
+			   ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
+}
+
+void node_at_point(double x, double y, struct wlr_surface **psurface,
+				   Client **pc, LayerSurface **pl, MangoBarDecoration **bar,
+				   double *nx, double *ny) {
+	struct wlr_scene_node *node = NULL;
+	struct wlr_surface *surface = NULL;
+	Client *c = NULL;
+	LayerSurface *l = NULL;
+	MangoBarDecoration *mangobar = NULL;
+	int32_t layer;
+	Client *ovc = NULL;
+
+	if (psurface)
+		*psurface = NULL;
+	if (pc)
+		*pc = NULL;
+	if (pl)
+		*pl = NULL;
+	if (bar)
+		*bar = NULL;
+
+	for (layer = NUM_LAYERS - 1; layer >= 0; layer--) {
+		if (layer == LyrFadeOut)
+			continue;
+
+		/* Only layers_wrap carries the real layer stacking order;
+		 * layers[] are the content nodes that get inserted dynamically. */
+		node =
+			mango_scene_node_at(&server.layers_wrap[layer]->node, x, y, nx, ny);
+		if (!node)
+			continue;
+
+		MangoSceneNode *data = mango_scene_node_find(node);
+
+		Monitor *cm = monitor_at_point(x, y);
+		if (cm && cm->special_dim_rect && cm->special_dim_rect->node.enabled &&
+			node == &cm->special_dim_rect->node) {
+			c = NULL;
+			l = NULL;
+			surface = NULL;
+			mangobar = NULL;
+			break;
+		}
+
+		if (node->type == WLR_SCENE_NODE_BUFFER) {
+			struct wlr_scene_surface *scene_surface =
+				wlr_scene_surface_try_from_buffer(
+					wlr_scene_buffer_from_node(node));
+			if (scene_surface) {
+				surface = scene_surface->surface;
+			}
+		}
+
+		if (layer == LyrIMPopup) {
+			c = NULL;
+			l = NULL;
+		} else if (data) {
+			if (data->type == LayerShell) {
+				l = data->owner;
+			} else if (data->type == GroupBar || data->type == TabBar ||
+					   data->type == TitleMessageBar) {
+				mangobar = data->owner;
+			} else if (data->type == XDGShell || data->type == X11) {
+				c = data->owner;
+			}
+		}
+
+		if (node->type == WLR_SCENE_NODE_RECT) {
+			if (c && (c->type == XDGShell || c->type == X11)) {
+				surface = client_surface(c);
+			}
+
+			if (l && l->type == LayerShell) {
+				surface = l->layer_surface->surface;
+			}
+		}
+
+		break;
+	}
+
+	if (psurface)
+		*psurface = surface;
+	if (pc)
+		*pc = c;
+	if (pl)
+		*pl = l;
+	if (bar)
+		*bar = mangobar;
+
+	if (server.selected_monitor && server.selected_monitor->isoverview) {
+		ovc = client_at_point(x, y);
+
+		if (ovc && (!l || layer_ignores_focus(l))) {
+			if (pc)
+				*pc = ovc;
+			if (psurface)
+				*psurface = ovc ? client_surface(ovc) : NULL;
+			if (pl)
+				*pl = NULL;
+			if (bar)
+				*bar = NULL;
+		}
+	}
+}
+/*
+ * Extra protocol: xdg-decoration, session lock, drm lease, image capture,
+ * idle inhibit, and seat selection (clipboard) misc protocol handling.
+ */
+void check_idle_inhibitor(struct wlr_surface *exclude) {
+	int32_t inhibited = 0;
+	Client *c = NULL;
+	struct wlr_surface *surface = NULL;
+	struct wlr_idle_inhibitor_v1 *inhibitor;
+
+	wl_list_for_each(inhibitor, &server.idle_inhibit_manager->inhibitors,
+					 link) {
+		surface = wlr_surface_get_root_surface(inhibitor->surface);
+
+		if (exclude == surface) {
+			continue;
+		}
+
+		toplevel_from_wlr_surface(inhibitor->surface, &c, NULL);
+
+		if (config.idleinhibit_ignore_visible) {
+			inhibited = 1;
+			break;
+		}
+
+		struct wlr_scene_tree *tree = surface->data;
+		if (!tree || (tree->node.enabled && (!c || !c->animation.tagouting))) {
+			inhibited = 1;
+			break;
+		}
+	}
+
+	wlr_idle_notifier_v1_set_inhibited(server.idle_notifier, inhibited);
+}
+
+void handle_xdg_decoration_destroy(struct wl_listener *listener, void *data) {
+	Client *c = wl_container_of(listener, c, destroy_decoration);
+
+	wl_list_remove(&c->destroy_decoration.link);
+	wl_list_remove(&c->set_decoration_mode.link);
+	c->decoration = NULL;
+}
+
+void handle_new_xdg_decoration(struct wl_listener *listener, void *data) {
+	struct wlr_xdg_toplevel_decoration_v1 *deco = data;
+	Client *c = deco->toplevel->base->data;
+	c->decoration = deco;
+
+	LISTEN(&deco->events.request_mode, &c->set_decoration_mode,
+		   handle_xdg_decoration_mode_request);
+	LISTEN(&deco->events.destroy, &c->destroy_decoration,
+		   handle_xdg_decoration_destroy);
+
+	handle_xdg_decoration_mode_request(&c->set_decoration_mode, deco);
+}
+
+void handle_new_idle_inhibitor(struct wl_listener *listener, void *data) {
+	struct wlr_idle_inhibitor_v1 *idle_inhibitor = data;
+	LISTEN_STATIC(&idle_inhibitor->events.destroy,
+				  handle_idle_inhibitor_destroy);
+
+	check_idle_inhibitor(NULL);
+}
+
+static struct wlr_surface *session_lock_focus_target(void) {
+	Monitor *m;
+
+	if (server.selected_monitor && server.selected_monitor->lock_surface)
+		return server.selected_monitor->lock_surface->surface;
+
+	wl_list_for_each(m, &server.monitors, link) {
+		if (m->wlr_output->enabled && m->lock_surface)
+			return m->lock_surface->surface;
+	}
+
+	wl_list_for_each(m, &server.monitors, link) {
+		if (m->lock_surface)
+			return m->lock_surface->surface;
+	}
+
+	return NULL;
+}
+
+void session_lock_focus_restore(void) {
+	struct wlr_surface *target;
+
+	if (!server.session_locked || !server.current_lock)
+		return;
+
+	target = session_lock_focus_target();
+	if (!target || server.seat->keyboard_state.focused_surface == target)
+		return;
+
+	client_notify_enter(target, wlr_seat_get_keyboard(server.seat));
+}
+
+bool session_lock_focus_missing(void) {
+	struct wlr_surface *target;
+
+	if (!server.session_locked || !server.current_lock)
+		return false;
+
+	target = session_lock_focus_target();
+
+	return target && server.seat->keyboard_state.focused_surface != target;
+}
+
+void handle_session_lock_new_surface(struct wl_listener *listener, void *data) {
+	SessionLock *lock = wl_container_of(listener, lock, new_surface);
+	struct wlr_session_lock_surface_v1 *lock_surface = data;
+	Monitor *m = lock_surface->output->data;
+	struct wlr_scene_tree *scene_tree = lock_surface->surface->data =
+		wlr_scene_subsurface_tree_create(lock->scene, lock_surface->surface);
+	m->lock_surface = lock_surface;
+
+	wlr_scene_node_set_position(&scene_tree->node, m->m.x, m->m.y);
+	wlr_session_lock_surface_v1_configure(lock_surface, m->m.width,
+										  m->m.height);
+
+	LISTEN(&lock_surface->surface->events.commit, &m->commit_lock_surface,
+		   handle_session_lock_surface_commit);
+	LISTEN(&lock_surface->events.destroy, &m->destroy_lock_surface,
+		   handle_session_lock_surface_destroy);
+
+	session_lock_focus_restore();
+}
+
+void handle_idle_inhibitor_destroy(struct wl_listener *listener, void *data) {
+	/* `data` is the wlr_surface of the idle inhibitor being destroyed,
+	 * at this point the idle inhibitor is still in the list of the manager
+	 */
+	check_idle_inhibitor(wlr_surface_get_root_surface(data));
+	wl_list_remove(&listener->link);
+	free(listener);
+}
+
+void session_lock_cleanup(SessionLock *lock, int32_t unlock) {
+	wlr_seat_keyboard_notify_clear_focus(server.seat);
+	server.session_locked = !unlock;
+
+	if (unlock && server.locked_bg->node.enabled) {
+		wlr_scene_node_set_enabled(&server.locked_bg->node, false);
+	}
+
+	wl_list_remove(&lock->new_surface.link);
+	wl_list_remove(&lock->unlock.link);
+	wl_list_remove(&lock->destroy.link);
+
+	wlr_scene_node_destroy(&lock->scene->node);
+	server.current_lock = NULL;
+	free(lock);
+
+	if (!unlock)
+		return;
+
+	pointer_cursor_activity();
+	wlr_cursor_set_xcursor(server.cursor, server.cursor_manager, "default");
+	client_focus(client_focus_top(server.selected_monitor), 1);
+	pointer_process_motion(0, NULL, 0, 0, 0, 0);
+}
+
+void handle_session_lock_surface_destroy(struct wl_listener *listener,
+										 void *data) {
+	Monitor *m = wl_container_of(listener, m, destroy_lock_surface);
+	struct wlr_session_lock_surface_v1 *lock_surface = m->lock_surface;
+
+	m->lock_surface = NULL;
+	wl_list_remove(&m->destroy_lock_surface.link);
+	wl_list_remove(&m->commit_lock_surface.link);
+
+	if (lock_surface->surface != server.seat->keyboard_state.focused_surface) {
+		if (server.exclusive_focus && !server.session_locked) {
+			reset_exclusive_layers_focus(m);
+		}
+		return;
+	}
+
+	if (server.session_locked) {
+		session_lock_focus_restore();
+	} else {
+		reset_exclusive_layers_focus(server.selected_monitor);
+	}
+}
+
+void handle_session_lock_surface_commit(struct wl_listener *listener,
+										void *data) {
+	Monitor *m = wl_container_of(listener, m, commit_lock_surface);
+	struct wlr_surface *focused;
+
+	if (!server.session_locked || !m->lock_surface ||
+		!m->lock_surface->surface->mapped)
+		return;
+
+	focused = server.seat->pointer_state.focused_surface;
+	if (focused &&
+		wlr_surface_get_root_surface(focused) == m->lock_surface->surface)
+		return;
+
+	pointer_process_motion(0, NULL, 0, 0, 0, 0);
+}
+
+void handle_session_lock_destroy(struct wl_listener *listener, void *data) {
+	SessionLock *lock = wl_container_of(listener, lock, destroy);
+	session_lock_cleanup(lock, 0);
+}
+
+void handle_new_session_lock(struct wl_listener *listener, void *data) {
+	struct wlr_session_lock_v1 *session_lock = data;
+	SessionLock *lock;
+	if (!config.allow_lock_transparent) {
+		wlr_scene_node_set_enabled(&server.locked_bg->node, true);
+	}
+	if (server.current_lock) {
+		wlr_session_lock_v1_destroy(session_lock);
+		return;
+	}
+	lock = session_lock->data = ecalloc(1, sizeof(*lock));
+	client_focus(NULL, 0);
+
+	lock->scene = wlr_scene_tree_create(server.layers[LyrBlock]);
+	server.current_lock = lock->lock = session_lock;
+	server.session_locked = 1;
+
+	LISTEN(&session_lock->events.new_surface, &lock->new_surface,
+		   handle_session_lock_new_surface);
+	LISTEN(&session_lock->events.destroy, &lock->destroy,
+		   handle_session_lock_destroy);
+	LISTEN(&session_lock->events.unlock, &lock->unlock,
+		   handle_session_lock_unlock);
+
+	wlr_session_lock_v1_send_locked(session_lock);
+}
+void handle_new_foreign_toplevel_capture_request(struct wl_listener *listener,
+												 void *data) {
+	struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request
+		*request = data;
+	Client *c = request->toplevel_handle->data;
+
+	if (c->shield_when_capture)
+		return;
+
+	if (c->image_capture_source == NULL) {
+		c->image_capture_source =
+			wlr_ext_image_capture_source_v1_create_with_scene_node(
+				&c->image_capture_scene->tree.node, server.event_loop,
+				server.allocator, server.renderer);
+		if (c->image_capture_source == NULL) {
+			return;
+		}
+	}
+
+	wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(
+		request, c->image_capture_source);
+}
+
+// Callback when a capture session is destroyed.
+void handle_session_destroy(struct wl_listener *listener, void *data) {
+	struct capture_session_tracker *tracker =
+		wl_container_of(listener, tracker, session_destroy);
+	server.active_capture_count--;
+	wl_list_remove(&tracker->session_destroy.link);
+
+	Client *c = NULL;
+	wl_list_for_each(c, &server.clients, link) {
+		if (c->shield_when_capture && !c->iskilling && VISIBLEON(c, c->mon)) {
+			arrange(c->mon, false, false);
+		}
+	}
+
+	mango_error(true, WLR_DEBUG, "Capture session ended, active count: %d",
+				server.active_capture_count);
+	free(tracker);
+}
+
+/*
+ * wlroots announces a single SHM format for capture sources, the renderer's
+ * preferred read format (RGBx on GLES2). Clients that only accept the BGR
+ * family cannot negotiate it, so announce those variants as well.
+ */
+static bool capture_source_format_supported(struct wlr_renderer *renderer,
+											uint32_t format) {
+	const struct wlr_drm_format_set *formats =
+		wlr_renderer_get_texture_formats(renderer, WLR_BUFFER_CAP_DATA_PTR);
+	if (formats == NULL) {
+		return false;
+	}
+
+	for (size_t i = 0; i < formats->len; i++) {
+		if (formats->formats[i].format == format) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool
+capture_source_add_shm_format(struct wlr_ext_image_capture_source_v1 *source,
+							  uint32_t format) {
+	for (size_t i = 0; i < source->shm_formats_len; i++) {
+		if (source->shm_formats[i] == format) {
+			return false;
+		}
+	}
+
+	uint32_t *formats = realloc(
+		source->shm_formats, (source->shm_formats_len + 1) * sizeof(*formats));
+	if (formats == NULL) {
+		mango_error(true, WLR_ERROR,
+					"Failed to allocate capture source shm formats");
+		return false;
+	}
+
+	formats[source->shm_formats_len] = format;
+	source->shm_formats = formats;
+	source->shm_formats_len++;
+	return true;
+}
+
+static void capture_session_announce_bgr_shm_formats(
+	struct wlr_ext_image_copy_capture_session_v1 *session) {
+	struct wlr_ext_image_capture_source_v1 *source = session->source;
+	if (source == NULL) {
+		return;
+	}
+
+	struct wlr_output *output =
+		wlr_output_try_from_ext_image_capture_source_v1(source);
+	struct wlr_renderer *renderer = output != NULL && output->renderer != NULL
+										? output->renderer
+										: server.renderer;
+	if (renderer == NULL) {
+		return;
+	}
+
+	const uint32_t bgr_formats[] = {DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888};
+	bool updated = false;
+	for (size_t i = 0; i < sizeof(bgr_formats) / sizeof(bgr_formats[0]); i++) {
+		if (!capture_source_format_supported(renderer, bgr_formats[i])) {
+			continue;
+		}
+		if (capture_source_add_shm_format(source, bgr_formats[i])) {
+			updated = true;
+		}
+	}
+
+	if (updated) {
+		/* Let the clients of this source know about the new formats. */
+		wl_signal_emit_mutable(&source->events.constraints_update, NULL);
+	}
+}
+
+// Callback when a new capture session is created.
+void handle_ext_image_copy_capture_new_session(struct wl_listener *listener,
+											   void *data) {
+	struct wlr_ext_image_copy_capture_session_v1 *capture_session = data;
+
+	capture_session_announce_bgr_shm_formats(capture_session);
+
+	struct capture_session_tracker *tracker = calloc(1, sizeof(*tracker));
+	if (!tracker) {
+		mango_error(true, WLR_ERROR,
+					"Failed to allocate capture session tracker");
+		return;
+	}
+	tracker->session = capture_session;
+	tracker->session_destroy.notify = handle_session_destroy;
+	// Listens to the session destroy signal to decrease the count when the
+	// session ends.
+	wl_signal_add(&capture_session->events.destroy, &tracker->session_destroy);
+
+	server.active_capture_count++;
+
+	Client *c = NULL;
+	wl_list_for_each(c, &server.clients, link) {
+		if (c->shield_when_capture && !c->iskilling && VISIBLEON(c, c->mon)) {
+			arrange(c->mon, false, false);
+		}
+	}
+
+	mango_error(true, WLR_DEBUG,
+				"New capture session started, active count: %d",
+				server.active_capture_count);
+}
+
+void handle_xdg_decoration_mode_request(struct wl_listener *listener,
+										void *data) {
+	Client *c = wl_container_of(listener, c, set_decoration_mode);
+	struct wlr_xdg_toplevel_decoration_v1 *deco = data;
+
+	if (c->surface.xdg->initialized) {
+		// Gets the mode requested by the client.
+		enum wlr_xdg_toplevel_decoration_v1_mode requested_mode =
+			deco->requested_mode;
+
+		// If the client did not specify one, use the default mode.
+		if (!c->allow_csd) {
+			requested_mode = WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+		}
+
+		wlr_xdg_toplevel_decoration_v1_set_mode(c->decoration, requested_mode);
+	}
+}
+
+void handle_drm_lease_request(struct wl_listener *listener, void *data) {
+	struct wlr_drm_lease_request_v1 *req = data;
+	struct wlr_drm_lease_v1 *lease = wlr_drm_lease_request_v1_grant(req);
+
+	if (!lease) {
+		mango_error(true, WLR_ERROR, "Failed to grant lease request");
+		wlr_drm_lease_request_v1_reject(req);
+	}
+}
+
+void handle_request_set_primary_selection(struct wl_listener *listener,
+										  void *data) {
+	/* This event is raised by the seat when a client wants to set the
+	 * selection, usually when the user copies something. wlroots allows
+	 * compositors to ignore such requests if they so choose; honors them
+	 * unless primary selection is disabled
+	 */
+	struct wlr_seat_request_set_primary_selection_event *event = data;
+	if (config.disable_middle_paste)
+		return;
+	wlr_seat_set_primary_selection(server.seat, event->source, event->serial);
+}
+
+void apply_primary_selection(void) {
+	if (!config.disable_middle_paste || server.seat == NULL)
+		return;
+	if (server.seat->primary_selection_source != NULL)
+		wlr_seat_set_primary_selection(server.seat, NULL,
+									   wl_display_next_serial(server.display));
+}
+
+struct PrimarySelectionPolicy {
+	struct wl_listener destroy;
+	bool disable_middle_paste;
+};
+
+static void
+handle_primary_selection_policy_destroy(struct wl_listener *listener,
+										void *data) {
+	struct PrimarySelectionPolicy *policy;
+	policy = wl_container_of(listener, policy, destroy);
+	wl_list_remove(&policy->destroy.link);
+	free(policy);
+}
+
+static struct PrimarySelectionPolicy *
+primary_selection_policy(struct wl_client *client) {
+	struct wl_listener *listener = wl_client_get_destroy_listener(
+		client, handle_primary_selection_policy_destroy);
+	if (listener) {
+		struct PrimarySelectionPolicy *policy;
+		return wl_container_of(listener, policy, destroy);
+	}
+
+	struct PrimarySelectionPolicy *policy = calloc(1, sizeof(*policy));
+	if (!policy)
+		return NULL;
+	policy->disable_middle_paste = config.disable_middle_paste;
+	policy->destroy.notify = handle_primary_selection_policy_destroy;
+	wl_client_add_destroy_listener(client, &policy->destroy);
+	return policy;
+}
+
+bool mango_global_filter(const struct wl_client *client,
+						 const struct wl_global *global, void *data) {
+	if (client == NULL)
+		return true;
+
+	const struct wl_interface *interface = wl_global_get_interface(global);
+	if (interface == NULL)
+		return true;
+
+	if (strcmp(interface->name, "zwp_primary_selection_device_manager_v1") ==
+		0) {
+		struct PrimarySelectionPolicy *policy =
+			primary_selection_policy((struct wl_client *)client);
+		return policy == NULL || !policy->disable_middle_paste;
+	}
+
+	return true;
+}
+
+void handle_request_set_selection(struct wl_listener *listener, void *data) {
+	/* This event is raised by the seat when a client wants to set the
+	 * selection, usually when the user copies something. wlroots allows
+	 * compositors to ignore such requests if they so choose, but in mango we
+	 * always honor
+	 */
+	struct wlr_seat_request_set_selection_event *event = data;
+	wlr_seat_set_selection(server.seat, event->source, event->serial);
+}
+
+static bool client_keep_idle_inhibit(Client *c) {
+	if (!c || !c->mon)
+		return false;
+
+	if (c->idleinhibit_when_focus)
+		return true;
+
+	if (config.idleinhibit_when_fullscreen && c->isfullscreen &&
+		VISIBLEON(c, c->mon)) {
+		return true;
+	}
+
+	return false;
+}
+
+void check_keep_idle_inhibit(Client *c) {
+	if (server.keep_idle_inhibit_source && client_keep_idle_inhibit(c)) {
+		wl_event_source_timer_update(server.keep_idle_inhibit_source, 1000);
+	}
+}
+
+int32_t idle_keep_inhibit(void *data) {
+	if (!server.idle_inhibit_manager) {
+		wl_event_source_timer_update(server.keep_idle_inhibit_source, 0);
+		return 1;
+	}
+
+	if (server.session && !server.session->active) {
+		wl_event_source_timer_update(server.keep_idle_inhibit_source, 0);
+		return 1;
+	}
+
+	if (!server.selected_monitor ||
+		!client_keep_idle_inhibit(server.selected_monitor->sel)) {
+		wl_event_source_timer_update(server.keep_idle_inhibit_source, 0);
+		return 1;
+	}
+
+	if (server.seat && server.idle_notifier) {
+		wlr_idle_notifier_v1_notify_activity(server.idle_notifier, server.seat);
+		wl_event_source_timer_update(server.keep_idle_inhibit_source, 1000);
+	}
+	return 1;
+}
+
+void handle_session_lock_unlock(struct wl_listener *listener, void *data) {
+	SessionLock *lock = wl_container_of(listener, lock, unlock);
+	session_lock_cleanup(lock, 1);
+}

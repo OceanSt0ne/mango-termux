@@ -1,0 +1,296 @@
+diff --git a/include/render/fx_renderer/fx_renderer.h b/include/render/fx_renderer/fx_renderer.h
+index ba6cc4b..be6ffa9 100644
+--- a/include/render/fx_renderer/fx_renderer.h
++++ b/include/render/fx_renderer/fx_renderer.h
+@@ -106,6 +106,8 @@ struct fx_texture *fx_get_texture(struct wlr_texture *wlr_texture);
+ 
+ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl);
+ 
++extern fx_buffer_egl_image_provider_t fx_buffer_egl_image_provider;
++
+ struct wlr_egl *wlr_fx_renderer_get_egl(struct wlr_renderer *renderer);
+ 
+ void push_fx_debug_(struct fx_renderer *renderer, const char *file, const char *func);
+diff --git a/include/scenefx/render/fx_renderer/fx_renderer.h b/include/scenefx/render/fx_renderer/fx_renderer.h
+index cbd312d..4613544 100644
+--- a/include/scenefx/render/fx_renderer/fx_renderer.h
++++ b/include/scenefx/render/fx_renderer/fx_renderer.h
+@@ -1,6 +1,8 @@
+ #ifndef SCENEFX_FX_OPENGL_H
+ #define SCENEFX_FX_OPENGL_H
+ 
++#include <EGL/egl.h>
++#include <EGL/eglext.h>
+ #include <GLES2/gl2.h>
+ #include <GLES2/gl2ext.h>
+ #include <wlr/backend.h>
+@@ -12,6 +14,23 @@ struct fx_renderer;
+ struct wlr_renderer *fx_renderer_create_with_drm_fd(int drm_fd);
+ struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend);
+ 
++/*
++ * Termux/Android fallback: create the FX renderer from an existing EGL
++ * display/context (e.g. an Android EGL context) instead of a DRM render node.
++ */
++struct wlr_renderer *fx_renderer_create_with_egl(EGLDisplay display,
++	EGLContext context);
++
++/*
++ * Allows the embedding application to provide an EGLImage for custom buffers
++ * (e.g. Android AHardwareBuffer) that cannot be imported through
++ * EGL_EXT_image_dma_buf_import. Return EGL_NO_IMAGE_KHR for other buffers.
++ */
++typedef EGLImageKHR (*fx_buffer_egl_image_provider_t)(
++	struct wlr_buffer *buffer);
++void fx_renderer_set_buffer_egl_image_provider(
++	fx_buffer_egl_image_provider_t provider);
++
+ struct fx_renderer *fx_get_renderer(struct wlr_renderer *wlr_renderer);
+ 
+ bool fx_renderer_check_ext(struct wlr_renderer *renderer, const char *ext);
+diff --git a/render/egl.c b/render/egl.c
+index 85d5f6f..63d272d 100644
+--- a/render/egl.c
++++ b/render/egl.c
+@@ -205,8 +205,10 @@ static struct wlr_egl *egl_create(void) {
+ 	wlr_log(WLR_INFO, "Supported EGL client extensions: %s", client_exts_str);
+ 
+ 	if (!check_egl_ext(client_exts_str, "EGL_EXT_platform_base")) {
+-		wlr_log(WLR_ERROR, "EGL_EXT_platform_base not supported");
+-		return NULL;
++		/* Android's vendor EGL does not advertise the platform-base client
++		 * extension, but an existing display/context can still be wrapped via
++		 * wlr_egl_create_with_context(). */
++		wlr_log(WLR_DEBUG, "EGL_EXT_platform_base not supported");
+ 	}
+ 
+ 	struct wlr_egl *egl = calloc(1, sizeof(*egl));
+diff --git a/render/fx_renderer/fx_framebuffer.c b/render/fx_renderer/fx_framebuffer.c
+index d514b34..888a571 100644
+--- a/render/fx_renderer/fx_framebuffer.c
++++ b/render/fx_renderer/fx_framebuffer.c
+@@ -134,15 +134,21 @@ struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer
+ 	buffer->buffer = wlr_buffer;
+ 	buffer->renderer = renderer;
+ 
+-	struct wlr_dmabuf_attributes dmabuf = {0};
+-	if (!wlr_buffer_get_dmabuf(wlr_buffer, &dmabuf)) {
+-		goto error_buffer;
++	if (fx_buffer_egl_image_provider != NULL) {
++		buffer->image = fx_buffer_egl_image_provider(wlr_buffer);
+ 	}
+ 
+-	buffer->image = wlr_egl_create_image_from_dmabuf(renderer->egl,
+-		&dmabuf, &buffer->external_only);
+ 	if (buffer->image == EGL_NO_IMAGE_KHR) {
+-		goto error_buffer;
++		struct wlr_dmabuf_attributes dmabuf = {0};
++		if (!wlr_buffer_get_dmabuf(wlr_buffer, &dmabuf)) {
++			goto error_buffer;
++		}
++
++		buffer->image = wlr_egl_create_image_from_dmabuf(renderer->egl,
++			&dmabuf, &buffer->external_only);
++		if (buffer->image == EGL_NO_IMAGE_KHR) {
++			goto error_buffer;
++		}
+ 	}
+ 
+ 	wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer,
+diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
+index 39b6226..65bc367 100644
+--- a/render/fx_renderer/fx_pass.c
++++ b/render/fx_renderer/fx_pass.c
+@@ -145,6 +145,10 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
+ 		if (!ok) {
+ 			goto out;
+ 		}
++	} else if (fx_buffer_egl_image_provider != NULL) {
++		/* Android AHardwareBuffer backed targets are consumed by the X11
++		 * server via mmap, so make sure the GPU has finished writing. */
++		glFinish();
+ 	} else {
+ 		glFlush();
+ 	}
+diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
+index 8d0a7b2..fedac49 100644
+--- a/render/fx_renderer/fx_renderer.c
++++ b/render/fx_renderer/fx_renderer.c
+@@ -67,6 +67,10 @@ static const struct wlr_drm_format_set *fx_get_texture_formats(
+ static const struct wlr_drm_format_set *fx_get_render_formats(
+ 		struct wlr_renderer *wlr_renderer) {
+ 	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
++	if (fx_buffer_egl_image_provider != NULL) {
++		/* AHardwareBuffer render targets use the SHM/CPU format set. */
++		return &renderer->shm_texture_formats;
++	}
+ 	return wlr_egl_get_dmabuf_render_formats(renderer->egl);
+ }
+ 
+@@ -354,6 +358,27 @@ struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend) {
+ 	return renderer_autocreate(backend, -1);
+ }
+ 
++fx_buffer_egl_image_provider_t fx_buffer_egl_image_provider;
++
++void fx_renderer_set_buffer_egl_image_provider(
++		fx_buffer_egl_image_provider_t provider) {
++	fx_buffer_egl_image_provider = provider;
++}
++
++struct wlr_renderer *fx_renderer_create_with_egl(EGLDisplay display,
++		EGLContext context) {
++	struct wlr_egl *egl = wlr_egl_create_with_context(display, context);
++	if (egl == NULL) {
++		return NULL;
++	}
++
++	struct wlr_renderer *renderer = fx_renderer_create_egl(egl);
++	if (renderer == NULL) {
++		wlr_egl_destroy(egl);
++	}
++	return renderer;
++}
++
+ static bool link_shaders(struct fx_renderer *renderer) {
+ 	// quad fragment shader
+ 	if (!link_quad_program(&renderer->shaders.quad, false)) {
+@@ -459,7 +484,13 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+ 	if (renderer == NULL) {
+ 		return NULL;
+ 	}
+-	wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl, WLR_BUFFER_CAP_DMABUF);
++	uint32_t buffer_caps = WLR_BUFFER_CAP_DMABUF;
++	if (fx_buffer_egl_image_provider != NULL) {
++		/* Buffers are supplied by the custom provider; without DMA-BUF we
++		 * only advertise CPU/SHM capabilities to the rest of wlroots. */
++		buffer_caps = WLR_BUFFER_CAP_SHM | WLR_BUFFER_CAP_DATA_PTR;
++	}
++	wlr_renderer_init(&renderer->wlr_renderer, &renderer_impl, buffer_caps);
+ 	renderer->wlr_renderer.features.output_color_transform = false;
+ 
+ 	wl_list_init(&renderer->buffers);
+@@ -476,7 +507,8 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+ 	wlr_log(WLR_INFO, "GL renderer: %s", glGetString(GL_RENDERER));
+ 	wlr_log(WLR_INFO, "Supported FX extensions: %s", exts_str);
+ 
+-	if (!renderer->egl->exts.EXT_image_dma_buf_import) {
++	if (!renderer->egl->exts.EXT_image_dma_buf_import &&
++			fx_buffer_egl_image_provider == NULL) {
+ 		wlr_log(WLR_ERROR, "EGL_EXT_image_dma_buf_import not supported");
+ 		free(renderer);
+ 		return NULL;
+@@ -487,9 +519,14 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+ 		return NULL;
+ 	}
+ 	if (!check_gl_ext(exts_str, "GL_EXT_unpack_subimage")) {
+-		wlr_log(WLR_ERROR, "GL_EXT_unpack_subimage not supported");
+-		free(renderer);
+-		return NULL;
++		/* GLES 3.0+ provides UNPACK_ROW_LENGTH/SKIP_PIXELS/SKIP_ROWS in
++		 * core; some drivers (e.g. Adreno) do not advertise the EXT name. */
++		const char *gl_version = (const char *)glGetString(GL_VERSION);
++		if (gl_version == NULL || strncmp(gl_version, "OpenGL ES 3", 11) != 0) {
++			wlr_log(WLR_ERROR, "GL_EXT_unpack_subimage not supported");
++			free(renderer);
++			return NULL;
++		}
+ 	}
+ 
+ 	renderer->exts.EXT_read_format_bgra =
+diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index 9a9fcc0..9b3e6e1 100644
+--- a/types/scene/wlr_scene.c
++++ b/types/scene/wlr_scene.c
+@@ -20,6 +20,7 @@
+ #include "render/color.h"
+ #include "render/tracy.h"
+ #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
++#include "render/fx_renderer/fx_renderer.h"
+ #include "scenefx/render/pass.h"
+ #include "scenefx/types/fx/blur_data.h"
+ #include "scenefx/types/fx/clipped_region.h"
+@@ -1956,7 +1957,9 @@ static float get_luminance_multiplier(const struct wlr_color_luminances *src_lum
+ 
+ static void scene_entry_render(struct render_list_entry *entry, const struct render_data *data) {
+ 	struct wlr_scene_node *node = entry->node;
+-	struct fx_gles_render_pass *fx_pass = fx_get_render_pass(data->render_pass);
++	bool is_fx = wlr_renderer_is_fx(data->output->output->renderer);
++	struct fx_gles_render_pass *fx_pass = is_fx
++		? fx_get_render_pass(data->render_pass) : NULL;
+ 
+ 	pixman_region32_t render_region;
+ 	pixman_region32_init(&render_region);
+@@ -2026,8 +2029,10 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 			},
+ 		};
+ 
+-		// TODO: Use the base wlr_render_pass_add_rect as a fast-path in the future
+-		if (!fx_corner_radii_is_empty(&rect_corners)) {
++		if (!is_fx) {
++			// Non-FX renderer (e.g. pixman under Termux/X11): no effects.
++			wlr_render_pass_add_rect(data->render_pass, &rect_options.base);
++		} else if (!fx_corner_radii_is_empty(&rect_corners)) {
+ 			struct fx_render_rounded_rect_options rounded_rect_options = {
+ 				.base = rect_options.base,
+ 				.corners = fx_corner_radii_scale(rect_corners, data->scale),
+@@ -2109,8 +2114,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 			.clipped_region = {0},
+ 		};
+ 
+-		// TODO: Use the base wlr_render_pass_add_texture as a fast-path in the future
+-		fx_render_pass_add_texture(fx_pass, &tex_options);
++		if (is_fx) {
++			fx_render_pass_add_texture(fx_pass, &tex_options);
++		} else {
++			// Non-FX renderer: ignore corners/shadow/blur, draw the texture.
++			wlr_render_pass_add_texture(data->render_pass, &tex_options.base);
++		}
+ 
+ 		struct wlr_scene_output_sample_event sample_event = {
+ 			.output = data->output,
+@@ -2129,6 +2138,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 		}
+ 		break;
+ 	case WLR_SCENE_NODE_SHADOW:;
++		if (!is_fx) {
++			break;
++		}
+ 		struct wlr_scene_shadow *scene_shadow = wlr_scene_shadow_from_node(node);
+ 
+ 		struct wlr_box shadow_clipped_region_box = scene_shadow->clipped_region.area;
+@@ -2160,6 +2172,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 		fx_render_pass_add_box_shadow(fx_pass, &shadow_options);
+ 		break;
+ 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
++		if (!is_fx) {
++			break;
++		}
+ 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
+ 		// Re-render the optimized blur buffer when needed. Retry rendering
+ 		// until there's a visible blur_node.
+@@ -2191,6 +2206,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+ 		}
+ 		break;
+ 	case WLR_SCENE_NODE_BLUR:;
++		if (!is_fx) {
++			break;
++		}
+ 		struct wlr_scene_blur *blur = wlr_scene_blur_from_node(node);
+ 
+ 		struct wlr_texture *tex = NULL;
+@@ -3290,9 +3308,12 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+ 	wlr_damage_ring_rotate_buffer(&scene_output->damage_ring, buffer,
+ 		&render_data.damage);
+ 
+-	struct fx_gles_render_pass *fx_pass = fx_get_render_pass(render_pass);
++	struct fx_gles_render_pass *fx_pass =
++		wlr_renderer_is_fx(output->renderer)
++			? fx_get_render_pass(render_pass) : NULL;
+ 	bool should_compensate_blur = false;
+-	if (fx_render_pass_init_offscreen_buffers(render_pass, output)
++	if (fx_pass != NULL
++			&& fx_render_pass_init_offscreen_buffers(render_pass, output)
+ 			&& pixman_region32_not_empty(&render_data.damage)) {
+ 		// Blur artifact prevention
+ 		// Note: Supports individual blur node blur_data

@@ -1,0 +1,16 @@
+/.cache
+/.vscode
+/result
+/build
+/scenefx/build
+/mango-wlonly
+config.h
+/mango
+mango.o
+util.o
+*-protocol.h
+*-protocol.c
+*-protocol.o
+
+.envrc
+.direnv
