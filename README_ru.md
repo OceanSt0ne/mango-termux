@@ -3,14 +3,9 @@
 <div align="center">
   <img src="assets/mango.svg" alt="Логотип Mango" width="120"/>
 
-  <h1>Mango Wayland Compositor</h1>
+  <h1>Mango Wayland Compositor v0.18.4</h1>
 
   <p>Быстрый, многофункциональный Wayland-композитор.</p>
-
-<a href="https://github.com/mangowm/mango/stargazers"><img src="https://img.shields.io/github/stars/mangowm/mango?style=flat&color=orange" alt="Звёзды"/></a>
-<a href="https://github.com/mangowm/mango/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat" alt="Лицензия"/></a>
-<a href="https://repology.org/project/mangowm/versions"><img src="https://repology.org/badge/tiny-repos/mangowm.svg" alt="Пакеты"/></a>
-<a href="https://discord.gg/CPjbDxesh5"><img src="https://img.shields.io/discord/1430889676264177687?style=flat&logo=discord&label=discord" alt="Discord"/></a>
 
 </div>
 
@@ -26,127 +21,6 @@ https://github.com/user-attachments/assets/be85e13f-7798-456d-957e-f8931687392e
 > [Termux / Android](#termux--android) ниже.
 
 > Все раскладки в действии: [mangowm.github.io](https://mangowm.github.io/)
-
-## Почему Mango?
-
-- **Лёгкий и быстрый** — без ущерба функциональности
-- **Отличная поддержка xwayland** — запускайте X11-приложения без трения (масштабирование без размытия)
-- **Теги, а не рабочие пространства** — каждый тег сохраняет собственную независимую раскладку окон
-- **Плавные анимации** — открытие/перемещение/закрытие окон, переходы тегов, layer surfaces
-- **Гибкие раскладки** — scroller, vertical-scroller, master-stack, monocle, dwindle и другие
-- **Богатые состояния окон** — swallow, group, minimize, maximize, global, overlay, fakefullscreen
-- **Эффекты окон** — blur, тени, скругление углов, прозрачность (через scenefx)
-- **Отличная поддержка методов ввода** — text-input v2/v3
-- **Мощный scratchpad** — scratchpad в стиле sway, special workspace и named-scratchpad
-- **Обзор с jump-label** — все окна сразу, с метками easymotion.
-- **Переключатель приложений в стиле GNOME** — быстрое переключение между приложениями
-- **IPC** — отправка и приём сообщений из внешних программ
-- **Горячая перезагрузка конфига** — изменения привязок без перезапуска
-- **Без мерцания** — каждый кадр корректен
-
-## Видение
-
-**Стабильность прежде всего.** После месяцев тестирования Mango достаточно надёжен для повседневного использования. Критических изменений будет минимум.
-
-**Практичность важнее новизны.** Функции добавляются, когда они действительно улучшают ежедневные сценарии, а не ради полноты.
-
-**Сфокусированный охват.** Узкие запросы оцениваются по интересу сообщества. Значительное число голосов двигает их вперёд.
-
-## Политика использования ИИ
-
-- **Pull requests:** ИИ можно использовать для помощи в подготовке pull request (PR), но прямые PR, сгенерированные ИИ, не принимаются. Авторы должны ясно понимать, что делает код, разумна ли и строга ли реализация, не расходует ли она лишние ресурсы и достаточно ли решение цельное, а не разрозненное.
-
-- **Сообщения об ошибках:** использовать ИИ для сообщения об ошибках допустимо. Информация от ИИ может служить справочным материалом; это предпочтительнее отчётов без ссылок.
-
-## Установка
-
-[![Статус пакетов](https://repology.org/badge/vertical-allrepos/mangowm.svg)](https://repology.org/project/mangowm/versions)
-
-### Arch Linux
-
-```bash
-yay -S mangowm-git
-```
-#### используйте мой конфиг
-- установите зависимости
-```
-yay -S rofi foot xdg-desktop-portal-wlr swaybg waybar wl-clip-persist cliphist wl-clipboard wlsunset xfce-polkit swaync pamixer wlr-dpms sway-audio-idle-inhibit-git swayidle dimland-git brightnessctl swayosd wlr-randr grim slurp satty swaylock-effects-git wlogout sox
-```
-- склонируйте конфиг
-```
-git clone https://github.com/DreamMaoMao/mango-config.git ~/.config/mango
-```
-
-### Другие дистрибутивы
-
-См. [руководство по установке](https://mangowm.github.io/docs/installation) для Fedora, Gentoo, Guix, NixOS, openSUSE, PikaOS, AerynOS, а также для сборки из исходников.
-
-## Документация
-
-- **[mangowm.github.io](https://mangowm.github.io/)** — документация на сайте: справочник по конфигурации, привязки клавиш, раскладки, IPC и другое
-- **[GitHub Wiki](https://github.com/mangowm/mango/wiki/)** — вики, поддерживаемая сообществом
-
-## Сообщество
-
-Присоединяйтесь к нам в **[Discord](https://discord.gg/CPjbDxesh5)**
-
-## Благодарности
-
-- [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) — реализация протоколов Wayland
-- [dwl](https://codeberg.org/dwl/dwl) — основа, на которой построен Mango
-- [scenefx](https://github.com/wlrfx/scenefx) — библиотека эффектов окон
-- [owl](https://github.com/dqrk0jeste/owl) — основа для анимаций
-- [sway](https://github.com/swaywm/sway) — справочная реализация протоколов
-
-## Спонсоры
-
-Если Mango делает ваш рабочий стол лучше, поддержите его разработку.
-
-Спасибо всем, кто поддержал проект:
-
-<table>
-  <tr>
-    <!-- добавляйте новых спонсоров сюда: скопируйте блок <td>...</td> ниже -->
-    <td align="center">
-      <a href="https://github.com/dl09r">
-        <img src="https://unavatar.io/github/dl09r" width="48" style="border-radius:50%"/><br/>
-        <sub>dl09r</sub>
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/tonybanters">
-        <img src="https://unavatar.io/github/tonybanters" width="48" style="border-radius:50%"/><br/>
-        <sub>tonybanters</sub>
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/vinthara">
-        <img src="https://unavatar.io/github/vinthara" width="48" style="border-radius:50%"/><br/>
-        <sub>vinthara</sub>
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/stepbrobd">
-        <img src="https://unavatar.io/github/stepbrobd" width="48" style="border-radius:50%"/><br/>
-        <sub>stepbrobd</sub>
-      </a>
-    </td>
-  </tr>
-</table>
-
-Принимаются криптовалютные пожертвования:
-
-<table>
-  <tr>
-    <td valign="middle">
-      <strong>Сеть:</strong> BEP20 (BSC)<br/>
-      <strong>Адрес:</strong> <code>0xf9cda472f2556671d2504afc4c35340ec5615da1</code>
-    </td>
-    <td valign="middle">
-      <img width="120" alt="QR-код спонсора" src="assets/crypto_sponserme_qrcode.png" />
-    </td>
-  </tr>
-</table>
 
 ---
 
