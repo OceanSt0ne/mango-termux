@@ -3,7 +3,7 @@
 <div align="center">
   <img src="assets/mango.svg" alt="Mango Logo" width="120"/>
 
-  <h1>Mango Wayland Compositor</h1>
+  <h1>Mango Wayland Compositor v0.18.4</h1>
 
   <p>A fast, feature-rich Wayland compositor.</p>
 
