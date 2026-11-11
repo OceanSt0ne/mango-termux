@@ -200,7 +200,8 @@ Termux:GUI is no longer used.
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
             wlroots libwayland libwayland-protocols libxkbcommon \
-            libpixman libdrm libxcb libglvnd-dev mesa mesa-dev littlecms \
+            libpixman libdrm libxcb xcb-util-wm xcb-util-renderutil \
+            xwayland libglvnd-dev mesa mesa-dev littlecms \
             vulkan-loader pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
@@ -251,7 +252,8 @@ You need Android arm64, Termux, and the **Termux:X11** app
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
-  libdrm libxcb libglvnd-dev mesa mesa-dev littlecms vulkan-loader \
+  libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \
+  libglvnd-dev mesa mesa-dev littlecms vulkan-loader \
   pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
@@ -314,7 +316,7 @@ chmod 000 /data/data/com.termux/files/lib
 # mango
 cd ~/Projects/mango-termux
 chmod 700 /data/data/com.termux/files/lib
-meson setup build --prefix="$PREFIX" -Dtermux=true -Dxwayland=disabled
+meson setup build --prefix="$PREFIX" -Dtermux=true -Dxwayland=enabled
 meson compile -C build && meson install -C build
 chmod 000 /data/data/com.termux/files/lib
 ```
@@ -348,6 +350,8 @@ The script:
   `termux-x11 "$DISPLAY" -ac -noreset`, waits for a connection, removes stale
   lock/socket files, and retries;
 - sets `WLR_BACKENDS=x11`;
+- lets mango start Xwayland and export its own `DISPLAY` to child processes, so
+  X11 applications opened from mango stay inside the nested session;
 - launches `$PREFIX/lib/mango-termux/mango` (GPU effects), or the installed
   `mango`, `./build/mango`, or `$MANGO_BIN` if it is absent.
 
@@ -505,8 +509,9 @@ pixman path; use `mango-termux` for effects.
   working `/system/lib64/libEGL.so` and AHardwareBuffer support; otherwise
   pixman is used.
 - At very high resolutions, copying AHB to SHM for X11 can be a bottleneck.
-- XWayland is disabled in this build (`-Dxwayland=disabled`); X11 applications
-  will not launch directly.
+- XWayland is enabled. X11 apps started from mango use its nested Xwayland
+  display and are managed by the compositor; apps launched from a shell with the
+  outer `DISPLAY` (`:0`) still open directly in Termux:X11.
 - `chvt`/virtual terminal switching is unavailable.
 
 ### Diagnostics
@@ -526,6 +531,11 @@ pixman path; use `mango-termux` for effects.
 - `Failed to connect to Termux:X11` — check `$TMPDIR/termux-x11.log`, launch
   the Termux:X11 app manually, and test the connection:
   `DISPLAY=:0 mango-x11-check; echo $?`.
+- X11 apps open on the outer Termux:X11 desktop instead of inside mango — they
+  inherited the outer `DISPLAY` (`:0`). Start them from a terminal opened inside
+  mango (it exports its nested Xwayland display), or launch via
+  `mango-termux -s <app>`. Rebuild with the current `./build-termux.sh`, which
+  enables Xwayland for existing build directories too.
 - Black/empty screen — make sure the Termux:X11 app is open; launch with
   `run-mango.sh -d` and inspect the log.
 - Slow — lower the Termux:X11 screen resolution or disable animations in
