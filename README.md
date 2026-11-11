@@ -80,7 +80,8 @@ Termux:GUI is no longer used.
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
             wlroots libwayland libwayland-protocols libxkbcommon \
-            libpixman libdrm libxcb libglvnd-dev mesa littlecms \
+            libpixman libdrm libxcb xcb-util-wm xcb-util-renderutil \
+            xwayland libglvnd-dev mesa mesa-dev littlecms \
             vulkan-loader pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
@@ -89,6 +90,36 @@ pkg install x11-repo
 pkg update
 pkg install termux-x11-nightly
 ```
+
+### Patched wlroots 0.20 (optional)
+
+The port builds against wlroots 0.20. A pre-patched 0.20.2 tree with the official
+Termux fixes (`shm_open`, Xwayland paths, Termux:GUI backend) is available at
+<https://github.com/OceanSt0ne/wlroots-termux>. Install it before building mango
+if you need those patches or want to replace the Termux package:
+
+```bash
+pkg install x11-repo
+pkg install meson ninja clang pkg-config patch git \
+  libwayland libwayland-protocols libdrm libxkbcommon libpixman \
+  libglvnd-dev mesa-dev vulkan-loader-generic vulkan-headers glslang \
+  libxcb xcb-util-renderutil xcb-util-wm xwayland littlecms termux-gui-c
+
+git clone https://github.com/OceanSt0ne/wlroots-termux.git ~/Projects/wlroots-0.20
+cd ~/Projects/wlroots-0.20
+chmod 700 /data/data/com.termux/files/lib
+meson setup build --prefix="$PREFIX" \
+  -Dexamples=false -Dxwayland=enabled -Dsession=disabled \
+  -Dbackends=x11,termuxgui -Drenderers=gles2,vulkan -Dwerror=false
+ninja -C build
+ninja -C build install
+pkg-config --modversion wlroots-0.20   # 0.20.2
+```
+
+The Termux patches are already committed, so do not apply them again. After
+installing, rebuild mango with `./build-termux.sh` so the private
+`$PREFIX/lib/mango-termux/libwlroots-0.20.so` copy is refreshed. To roll back to
+the Termux package: `pkg reinstall wlroots`.
 
 `scenefx 0.5` is bundled in `scenefx/` and built from source (see below); it is
 not available in the Termux repositories.
@@ -101,8 +132,9 @@ You need Android arm64, Termux, and the **Termux:X11** app
 ```bash
 pkg install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
-  libdrm libxcb libglvnd-dev mesa littlecms vulkan-loader pcre2 \
-  pango cjson libandroid-wordexp
+  libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \
+  libglvnd-dev mesa mesa-dev littlecms vulkan-loader \
+  pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
 pkg install x11-repo
@@ -164,7 +196,7 @@ chmod 000 /data/data/com.termux/files/lib
 # mango
 cd ~/Projects/mango-termux
 chmod 700 /data/data/com.termux/files/lib
-meson setup build --prefix="$PREFIX" -Dtermux=true -Dxwayland=disabled
+meson setup build --prefix="$PREFIX" -Dtermux=true -Dxwayland=enabled
 meson compile -C build && meson install -C build
 chmod 000 /data/data/com.termux/files/lib
 ```
@@ -198,6 +230,8 @@ The script:
   `termux-x11 "$DISPLAY" -ac -noreset`, waits for a connection, removes stale
   lock/socket files, and retries;
 - sets `WLR_BACKENDS=x11`;
+- lets mango start Xwayland and export its own `DISPLAY` to child processes, so
+  X11 applications opened from mango stay inside the nested session;
 - launches `$PREFIX/lib/mango-termux/mango` (GPU effects), or the installed
   `mango`, `./build/mango`, or `$MANGO_BIN` if it is absent.
 
@@ -355,8 +389,9 @@ pixman path; use `mango-termux` for effects.
   working `/system/lib64/libEGL.so` and AHardwareBuffer support; otherwise
   pixman is used.
 - At very high resolutions, copying AHB to SHM for X11 can be a bottleneck.
-- XWayland is disabled in this build (`-Dxwayland=disabled`); X11 applications
-  will not launch directly.
+- XWayland is enabled. X11 apps started from mango use its nested Xwayland
+  display and are managed by the compositor; apps launched from a shell with the
+  outer `DISPLAY` (`:0`) still open directly in Termux:X11.
 - `chvt`/virtual terminal switching is unavailable.
 
 ### Diagnostics
@@ -367,11 +402,20 @@ pixman path; use `mango-termux` for effects.
 - `Termux: AHB/EGL renderer unavailable, falling back to pixman` — Android
   system EGL/AHardwareBuffer or the private libraries were not found. Rebuild
   with `./build-termux.sh` (requires `patchelf`) and launch `mango-termux`.
+- `fatal error: 'gbm.h' file not found` — Termux's `mesa` package provides
+  `gbm.pc`/`libgbm`, but the header is in `mesa-dev`. Install it and rerun:
+  `pkg install mesa-dev && ./build-termux.sh`. No need to delete the build
+  directory; the failed target is rebuilt.
 - `X11 error: op 18:0, code 5` — harmless `ChangeProperty` errors when the X11
   backend starts.
 - `Failed to connect to Termux:X11` — check `$TMPDIR/termux-x11.log`, launch
   the Termux:X11 app manually, and test the connection:
   `DISPLAY=:0 mango-x11-check; echo $?`.
+- X11 apps open on the outer Termux:X11 desktop instead of inside mango — they
+  inherited the outer `DISPLAY` (`:0`). Start them from a terminal opened inside
+  mango (it exports its nested Xwayland display), or launch via
+  `mango-termux -s <app>`. Rebuild with the current `./build-termux.sh`, which
+  enables Xwayland for existing build directories too.
 - Black/empty screen — make sure the Termux:X11 app is open; launch with
   `run-mango.sh -d` and inspect the log.
 - Slow — lower the Termux:X11 screen resolution or disable animations in

@@ -42,8 +42,8 @@ if not termux_build
 else
   # bionic has no wordexp(3); Termux ships a replacement library.
   wordexp_dep = cc.find_library('android-wordexp')
-  # The Termux build uses the X11 backend even with xwayland disabled, so
-  # libxcb is required for the output window setup.
+  # The Termux build uses the X11 backend and nested Xwayland, so libxcb is
+  # required for both the output window setup and X11 application support.
   xcb = dependency('xcb')
 endif
 libwayland_client_dep = dependency('wayland-client')

@@ -27,18 +27,25 @@ for cmd in clang pkg-config meson ninja patchelf git; do
   command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
 done
 for pc in wlroots-0.20 wayland-server wayland-client wayland-protocols \
-          xkbcommon pixman-1 libdrm pangocairo libcjson xcb libpcre2-8 \
-          egl glesv2 gbm lcms2 vulkan; do
+          xkbcommon pixman-1 libdrm pangocairo libcjson xcb xcb-icccm \
+          xcb-randr libpcre2-8 egl glesv2 gbm lcms2 vulkan; do
   pkg-config --exists "$pc" 2>/dev/null || missing="$missing $pc"
 done
+# Xwayland is launched by wlroots so X11 apps opened inside mango end up in the
+# nested session instead of the outer Termux:X11 root window.
+command -v Xwayland >/dev/null 2>&1 || missing="$missing xwayland"
 [[ -f "$PREFIX/include/wordexp.h" ]] || missing="$missing libandroid-wordexp"
 [[ -f "$PREFIX/include/EGL/egl.h" ]] || missing="$missing libglvnd-dev"
 [[ -f "$PREFIX/include/GLES2/gl2.h" ]] || missing="$missing libglvnd-dev"
+# Termux's mesa package ships gbm.pc/libgbm, but gbm.h lives in mesa-dev.
+# Missing it makes scenefx fail with "fatal error: 'gbm.h' file not found".
+[[ -f "$PREFIX/include/gbm.h" ]] || missing="$missing mesa-dev"
 if [[ -n "$missing" ]]; then
   echo "Missing build dependencies:$missing"
   echo "Install e.g.: pkg install clang pkg-config ninja patchelf git python-pip \\"
   echo "  wlroots libwayland libwayland-protocols libxkbcommon libpixman \\"
-  echo "  libdrm libxcb libglvnd-dev mesa littlecms vulkan-loader \\"
+  echo "  libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \\"
+  echo "  libglvnd-dev mesa mesa-dev littlecms vulkan-loader \\"
   echo "  pcre2 pango cjson libandroid-wordexp"
   echo "  python -m pip install meson"
   exit 1
@@ -83,9 +90,14 @@ meson compile -C "$scenefx_dir/build"
 meson install -C "$scenefx_dir/build"
 
 echo "Building mango..."
+mango_meson_args=(--prefix="$PREFIX" -Dtermux=true -Dxwayland=enabled)
 if [[ ! -f "$self_dir/build/build.ninja" ]]; then
-  meson setup "$self_dir/build" "$self_dir" \
-    --prefix="$PREFIX" -Dtermux=true -Dxwayland=disabled
+  meson setup "$self_dir/build" "$self_dir" "${mango_meson_args[@]}"
+else
+  # Reconfigure existing builds too: older versions of this script disabled
+  # Xwayland, which made X11 apps open in the outer Termux:X11 session.
+  meson setup --reconfigure "$self_dir/build" "$self_dir" \
+    "${mango_meson_args[@]}"
 fi
 meson compile -C "$self_dir/build"
 meson install -C "$self_dir/build"
