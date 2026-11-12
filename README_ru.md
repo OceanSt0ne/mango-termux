@@ -22,6 +22,8 @@ https://github.com/user-attachments/assets/be85e13f-7798-456d-957e-f8931687392e
 
 > Все раскладки в действии: [mangowm.github.io](https://mangowm.github.io/)
 
+> **Интеграция с Noctalia:** [English](TERMUX_NOCTALIA.md) | [Русский](TERMUX_NOCTALIA_ru.md)
+
 ---
 
 ## Termux / Android

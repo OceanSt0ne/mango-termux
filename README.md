@@ -21,6 +21,7 @@ https://github.com/user-attachments/assets/be85e13f-7798-456d-957e-f8931687392e
 
 > See all layouts in action at [mangowm.github.io](https://mangowm.github.io/)
 
+> **Noctalia integration guide:** [English](TERMUX_NOCTALIA.md) | [Russian](TERMUX_NOCTALIA_ru.md)
 
 ---
 
