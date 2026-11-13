@@ -78,9 +78,9 @@ bool fx_render_pass_init_offscreen_buffers(struct wlr_render_pass *render_pass,
 			&pass->fx_offscreen_buffers->effects_buffer, &failed);
 	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
 			&pass->fx_offscreen_buffers->effects_buffer_swapped, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
 			&pass->fx_offscreen_buffers->optimized_blur_buffer, &failed);
-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
 			&pass->fx_offscreen_buffers->optimized_no_blur_buffer, &failed);
 
 	// Bind back to the default buffer
