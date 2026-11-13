@@ -359,10 +359,16 @@ struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend) {
 }
 
 fx_buffer_egl_image_provider_t fx_buffer_egl_image_provider;
+fx_buffer_dmabuf_provider_t fx_buffer_dmabuf_provider;
 
 void fx_renderer_set_buffer_egl_image_provider(
 		fx_buffer_egl_image_provider_t provider) {
 	fx_buffer_egl_image_provider = provider;
+}
+
+void fx_renderer_set_buffer_dmabuf_provider(
+		fx_buffer_dmabuf_provider_t provider) {
+	fx_buffer_dmabuf_provider = provider;
 }
 
 struct wlr_renderer *fx_renderer_create_with_egl(EGLDisplay display,

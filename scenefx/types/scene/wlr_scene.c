@@ -1083,6 +1083,21 @@ static void mark_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
 	}
 }
 
+static void set_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
+	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
+		if (node->enabled) {
+			scene_blur->dirty = true;
+		}
+	} else if (node->type == WLR_SCENE_NODE_TREE) {
+		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
+		struct wlr_scene_node *child;
+		wl_list_for_each(child, &scene_tree->children, link) {
+			set_all_optimized_blur_nodes_dirty(child);
+		}
+	}
+}
+
 struct wlr_scene_blur *wlr_scene_blur_create(struct wlr_scene_tree *parent,
 	   int width, int height) {
 	struct wlr_scene_blur *blur = calloc(1, sizeof(*blur));
@@ -2881,13 +2896,15 @@ bool wlr_scene_output_needs_frame(struct wlr_scene_output *scene_output) {
 }
 
 static bool should_blur_node_extend_damage(struct wlr_scene_node *node,
-		struct fx_gles_render_pass *fx_pass, struct blur_data *blur_data) {
+		struct fx_gles_render_pass *fx_pass, struct blur_data *blur_data,
+		struct wlr_scene *scene) {
 	switch (node->type) {
 	case WLR_SCENE_NODE_BLUR:;
 		struct wlr_scene_blur *blur_node = wlr_scene_blur_from_node(node);
 		// No artifact prevention needed when the whole blur is already
 		// rendered
 		if (blur_node->should_only_blur_bottom_layer && blur_node->strength == 1.0) {
+			set_all_optimized_blur_nodes_dirty(&scene->tree.node);
 			fx_pass->has_blur = true;
 			return false;
 		}
@@ -3344,7 +3361,8 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 			struct render_list_entry *entry = &list_data[i];
 			struct wlr_scene_node *node = entry->node;
 			struct blur_data blur_data = scene_output->scene->blur_data;
-			if (!should_blur_node_extend_damage(node, fx_pass, &blur_data)) {
+			if (!should_blur_node_extend_damage(node, fx_pass, &blur_data,
+					scene_output->scene)) {
 				continue;
 			}
 

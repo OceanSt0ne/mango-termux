@@ -368,7 +368,13 @@ Rendering:
   stride;
 - Mesa/Vulkan variables are scoped to mango's own renderer creation, so child
   GL clients (Ghostty, Kitty, etc.) keep their normal driver and platform
-  selection;
+  selection. With Termux Mesa that normally means llvmpipe; apps running inside
+  a proot container use their own Mesa (for example, Noctalia in Arch reports
+  llvmpipe) and cannot use Termux's Turnip driver;
+- AHB/offscreen buffers are sampled through their EGLImage/DMA-BUF handles
+  instead of CPU-mapped pixels, so scenefx blur reads the GPU-rendered scene.
+  Optimized blur is refreshed whenever a blur region is damaged, avoiding black
+  or stale backgrounds without forcing a full redraw every frame;
 - if GPU rendering is unavailable, `pixman` is enabled automatically and
   scenefx renders the scene without effects.
 

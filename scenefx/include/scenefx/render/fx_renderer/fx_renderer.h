@@ -31,6 +31,16 @@ typedef EGLImageKHR (*fx_buffer_egl_image_provider_t)(
 void fx_renderer_set_buffer_egl_image_provider(
 	fx_buffer_egl_image_provider_t provider);
 
+/*
+ * Allows the embedding application to expose DMA-BUF attributes for custom
+ * buffers that are not importable through wlr_buffer_get_dmabuf() but are
+ * still GPU-sampleable through the EGLImage provider above.
+ */
+typedef bool (*fx_buffer_dmabuf_provider_t)(struct wlr_buffer *buffer,
+	struct wlr_dmabuf_attributes *attribs);
+void fx_renderer_set_buffer_dmabuf_provider(
+	fx_buffer_dmabuf_provider_t provider);
+
 struct fx_renderer *fx_get_renderer(struct wlr_renderer *wlr_renderer);
 
 bool fx_renderer_check_ext(struct wlr_renderer *renderer, const char *ext);

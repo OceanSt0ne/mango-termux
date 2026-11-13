@@ -107,6 +107,7 @@ struct fx_texture *fx_get_texture(struct wlr_texture *wlr_texture);
 struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl);
 
 extern fx_buffer_egl_image_provider_t fx_buffer_egl_image_provider;
+extern fx_buffer_dmabuf_provider_t fx_buffer_dmabuf_provider;
 
 struct wlr_egl *wlr_fx_renderer_get_egl(struct wlr_renderer *renderer);
 

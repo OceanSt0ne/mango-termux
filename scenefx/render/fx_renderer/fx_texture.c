@@ -411,7 +411,10 @@ struct wlr_texture *fx_texture_from_buffer(struct wlr_renderer *wlr_renderer,
 	uint32_t format;
 	size_t stride;
 	struct wlr_dmabuf_attributes dmabuf;
-	if (wlr_buffer_get_dmabuf(buffer, &dmabuf)) {
+	if (fx_buffer_dmabuf_provider != NULL &&
+			fx_buffer_dmabuf_provider(buffer, &dmabuf)) {
+		return fx_texture_from_dmabuf(&renderer->wlr_renderer, buffer, &dmabuf);
+	} else if (wlr_buffer_get_dmabuf(buffer, &dmabuf)) {
 		return fx_texture_from_dmabuf(&renderer->wlr_renderer, buffer, &dmabuf);
 	} else if (wlr_buffer_begin_data_ptr_access(buffer,
 			WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &format, &stride)) {

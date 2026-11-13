@@ -385,12 +385,14 @@ static struct wlr_renderer *ahb_renderer_create_internal(void) {
 	}
 
 	fx_renderer_set_buffer_egl_image_provider(ahb_egl_image);
+	fx_renderer_set_buffer_dmabuf_provider(termux_ahb_buffer_get_dmabuf);
 
 	struct wlr_renderer *renderer =
 		fx_renderer_create_with_egl(egl_display, context);
 	if (renderer == NULL) {
 		wlr_log(WLR_ERROR, "AHB: FX renderer creation failed");
 		fx_renderer_set_buffer_egl_image_provider(NULL);
+		fx_renderer_set_buffer_dmabuf_provider(NULL);
 		return NULL;
 	}
 

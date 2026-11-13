@@ -1,18 +1,17 @@
 diff --git a/include/render/fx_renderer/fx_renderer.h b/include/render/fx_renderer/fx_renderer.h
-index ba6cc4b..be6ffa9 100644
 --- a/include/render/fx_renderer/fx_renderer.h
 +++ b/include/render/fx_renderer/fx_renderer.h
-@@ -106,6 +106,8 @@ struct fx_texture *fx_get_texture(struct wlr_texture *wlr_texture);
+@@ -106,6 +106,9 @@
  
  struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl);
  
 +extern fx_buffer_egl_image_provider_t fx_buffer_egl_image_provider;
++extern fx_buffer_dmabuf_provider_t fx_buffer_dmabuf_provider;
 +
  struct wlr_egl *wlr_fx_renderer_get_egl(struct wlr_renderer *renderer);
  
  void push_fx_debug_(struct fx_renderer *renderer, const char *file, const char *func);
 diff --git a/include/scenefx/render/fx_renderer/fx_renderer.h b/include/scenefx/render/fx_renderer/fx_renderer.h
-index cbd312d..4613544 100644
 --- a/include/scenefx/render/fx_renderer/fx_renderer.h
 +++ b/include/scenefx/render/fx_renderer/fx_renderer.h
 @@ -1,6 +1,8 @@
@@ -24,7 +23,7 @@ index cbd312d..4613544 100644
  #include <GLES2/gl2.h>
  #include <GLES2/gl2ext.h>
  #include <wlr/backend.h>
-@@ -12,6 +14,23 @@ struct fx_renderer;
+@@ -12,6 +14,33 @@
  struct wlr_renderer *fx_renderer_create_with_drm_fd(int drm_fd);
  struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend);
  
@@ -45,14 +44,23 @@ index cbd312d..4613544 100644
 +void fx_renderer_set_buffer_egl_image_provider(
 +	fx_buffer_egl_image_provider_t provider);
 +
++/*
++ * Allows the embedding application to expose DMA-BUF attributes for custom
++ * buffers that are not importable through wlr_buffer_get_dmabuf() but are
++ * still GPU-sampleable through the EGLImage provider above.
++ */
++typedef bool (*fx_buffer_dmabuf_provider_t)(struct wlr_buffer *buffer,
++	struct wlr_dmabuf_attributes *attribs);
++void fx_renderer_set_buffer_dmabuf_provider(
++	fx_buffer_dmabuf_provider_t provider);
++
  struct fx_renderer *fx_get_renderer(struct wlr_renderer *wlr_renderer);
  
  bool fx_renderer_check_ext(struct wlr_renderer *renderer, const char *ext);
 diff --git a/render/egl.c b/render/egl.c
-index 85d5f6f..63d272d 100644
 --- a/render/egl.c
 +++ b/render/egl.c
-@@ -205,8 +205,10 @@ static struct wlr_egl *egl_create(void) {
+@@ -205,8 +205,10 @@
  	wlr_log(WLR_INFO, "Supported EGL client extensions: %s", client_exts_str);
  
  	if (!check_egl_ext(client_exts_str, "EGL_EXT_platform_base")) {
@@ -66,10 +74,9 @@ index 85d5f6f..63d272d 100644
  
  	struct wlr_egl *egl = calloc(1, sizeof(*egl));
 diff --git a/render/fx_renderer/fx_framebuffer.c b/render/fx_renderer/fx_framebuffer.c
-index d514b34..888a571 100644
 --- a/render/fx_renderer/fx_framebuffer.c
 +++ b/render/fx_renderer/fx_framebuffer.c
-@@ -134,15 +134,21 @@ struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer
+@@ -134,15 +134,21 @@
  	buffer->buffer = wlr_buffer;
  	buffer->renderer = renderer;
  
@@ -98,10 +105,9 @@ index d514b34..888a571 100644
  
  	wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer,
 diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
-index 39b6226..65bc367 100644
 --- a/render/fx_renderer/fx_pass.c
 +++ b/render/fx_renderer/fx_pass.c
-@@ -78,7 +78,7 @@
+@@ -78,9 +78,9 @@
  			&pass->fx_offscreen_buffers->effects_buffer, &failed);
  	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
  			&pass->fx_offscreen_buffers->effects_buffer_swapped, &failed);
@@ -111,7 +117,9 @@ index 39b6226..65bc367 100644
 -	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
 +	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
  			&pass->fx_offscreen_buffers->optimized_no_blur_buffer, &failed);
-@@ -145,6 +145,10 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
+ 
+ 	// Bind back to the default buffer
+@@ -145,6 +145,10 @@
  		if (!ok) {
  			goto out;
  		}
@@ -123,10 +131,9 @@ index 39b6226..65bc367 100644
  		glFlush();
  	}
 diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
-index 8d0a7b2..fedac49 100644
 --- a/render/fx_renderer/fx_renderer.c
 +++ b/render/fx_renderer/fx_renderer.c
-@@ -67,6 +67,10 @@ static const struct wlr_drm_format_set *fx_get_texture_formats(
+@@ -67,6 +67,10 @@
  static const struct wlr_drm_format_set *fx_get_render_formats(
  		struct wlr_renderer *wlr_renderer) {
  	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
@@ -137,15 +144,21 @@ index 8d0a7b2..fedac49 100644
  	return wlr_egl_get_dmabuf_render_formats(renderer->egl);
  }
  
-@@ -354,6 +358,27 @@ struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend) {
+@@ -354,6 +358,33 @@
  	return renderer_autocreate(backend, -1);
  }
  
 +fx_buffer_egl_image_provider_t fx_buffer_egl_image_provider;
++fx_buffer_dmabuf_provider_t fx_buffer_dmabuf_provider;
 +
 +void fx_renderer_set_buffer_egl_image_provider(
 +		fx_buffer_egl_image_provider_t provider) {
 +	fx_buffer_egl_image_provider = provider;
++}
++
++void fx_renderer_set_buffer_dmabuf_provider(
++		fx_buffer_dmabuf_provider_t provider) {
++	fx_buffer_dmabuf_provider = provider;
 +}
 +
 +struct wlr_renderer *fx_renderer_create_with_egl(EGLDisplay display,
@@ -165,7 +178,7 @@ index 8d0a7b2..fedac49 100644
  static bool link_shaders(struct fx_renderer *renderer) {
  	// quad fragment shader
  	if (!link_quad_program(&renderer->shaders.quad, false)) {
-@@ -459,7 +484,13 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+@@ -459,7 +490,13 @@
  	if (renderer == NULL) {
  		return NULL;
  	}
@@ -180,7 +193,7 @@ index 8d0a7b2..fedac49 100644
  	renderer->wlr_renderer.features.output_color_transform = false;
  
  	wl_list_init(&renderer->buffers);
-@@ -476,7 +507,8 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+@@ -476,7 +513,8 @@
  	wlr_log(WLR_INFO, "GL renderer: %s", glGetString(GL_RENDERER));
  	wlr_log(WLR_INFO, "Supported FX extensions: %s", exts_str);
  
@@ -190,7 +203,7 @@ index 8d0a7b2..fedac49 100644
  		wlr_log(WLR_ERROR, "EGL_EXT_image_dma_buf_import not supported");
  		free(renderer);
  		return NULL;
-@@ -487,9 +519,14 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
+@@ -487,9 +525,14 @@
  		return NULL;
  	}
  	if (!check_gl_ext(exts_str, "GL_EXT_unpack_subimage")) {
@@ -208,8 +221,22 @@ index 8d0a7b2..fedac49 100644
  	}
  
  	renderer->exts.EXT_read_format_bgra =
+diff --git a/render/fx_renderer/fx_texture.c b/render/fx_renderer/fx_texture.c
+--- a/render/fx_renderer/fx_texture.c
++++ b/render/fx_renderer/fx_texture.c
+@@ -411,7 +411,10 @@
+ 	uint32_t format;
+ 	size_t stride;
+ 	struct wlr_dmabuf_attributes dmabuf;
+-	if (wlr_buffer_get_dmabuf(buffer, &dmabuf)) {
++	if (fx_buffer_dmabuf_provider != NULL &&
++			fx_buffer_dmabuf_provider(buffer, &dmabuf)) {
++		return fx_texture_from_dmabuf(&renderer->wlr_renderer, buffer, &dmabuf);
++	} else if (wlr_buffer_get_dmabuf(buffer, &dmabuf)) {
+ 		return fx_texture_from_dmabuf(&renderer->wlr_renderer, buffer, &dmabuf);
+ 	} else if (wlr_buffer_begin_data_ptr_access(buffer,
+ 			WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &format, &stride)) {
 diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
-index 9a9fcc0..9b3e6e1 100644
 --- a/types/scene/wlr_scene.c
 +++ b/types/scene/wlr_scene.c
 @@ -20,6 +20,7 @@
@@ -220,7 +247,29 @@ index 9a9fcc0..9b3e6e1 100644
  #include "scenefx/render/pass.h"
  #include "scenefx/types/fx/blur_data.h"
  #include "scenefx/types/fx/clipped_region.h"
-@@ -1956,7 +1957,9 @@ static float get_luminance_multiplier(const struct wlr_color_luminances *src_lum
+@@ -1082,6 +1083,21 @@
+ 	}
+ }
+ 
++static void set_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
++	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
++		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
++		if (node->enabled) {
++			scene_blur->dirty = true;
++		}
++	} else if (node->type == WLR_SCENE_NODE_TREE) {
++		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
++		struct wlr_scene_node *child;
++		wl_list_for_each(child, &scene_tree->children, link) {
++			set_all_optimized_blur_nodes_dirty(child);
++		}
++	}
++}
++
+ struct wlr_scene_blur *wlr_scene_blur_create(struct wlr_scene_tree *parent,
+ 	   int width, int height) {
+ 	struct wlr_scene_blur *blur = calloc(1, sizeof(*blur));
+@@ -1956,7 +1972,9 @@
  
  static void scene_entry_render(struct render_list_entry *entry, const struct render_data *data) {
  	struct wlr_scene_node *node = entry->node;
@@ -231,7 +280,7 @@ index 9a9fcc0..9b3e6e1 100644
  
  	pixman_region32_t render_region;
  	pixman_region32_init(&render_region);
-@@ -2026,8 +2029,10 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+@@ -2026,8 +2044,10 @@
  			},
  		};
  
@@ -244,7 +293,7 @@ index 9a9fcc0..9b3e6e1 100644
  			struct fx_render_rounded_rect_options rounded_rect_options = {
  				.base = rect_options.base,
  				.corners = fx_corner_radii_scale(rect_corners, data->scale),
-@@ -2109,8 +2114,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+@@ -2109,8 +2129,12 @@
  			.clipped_region = {0},
  		};
  
@@ -259,7 +308,7 @@ index 9a9fcc0..9b3e6e1 100644
  
  		struct wlr_scene_output_sample_event sample_event = {
  			.output = data->output,
-@@ -2129,6 +2138,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+@@ -2129,6 +2153,9 @@
  		}
  		break;
  	case WLR_SCENE_NODE_SHADOW:;
@@ -269,7 +318,7 @@ index 9a9fcc0..9b3e6e1 100644
  		struct wlr_scene_shadow *scene_shadow = wlr_scene_shadow_from_node(node);
  
  		struct wlr_box shadow_clipped_region_box = scene_shadow->clipped_region.area;
-@@ -2160,6 +2172,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+@@ -2160,6 +2187,9 @@
  		fx_render_pass_add_box_shadow(fx_pass, &shadow_options);
  		break;
  	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
@@ -279,7 +328,7 @@ index 9a9fcc0..9b3e6e1 100644
  		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
  		// Re-render the optimized blur buffer when needed. Retry rendering
  		// until there's a visible blur_node.
-@@ -2191,6 +2206,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
+@@ -2191,6 +2221,9 @@
  		}
  		break;
  	case WLR_SCENE_NODE_BLUR:;
@@ -289,7 +338,24 @@ index 9a9fcc0..9b3e6e1 100644
  		struct wlr_scene_blur *blur = wlr_scene_blur_from_node(node);
  
  		struct wlr_texture *tex = NULL;
-@@ -3290,9 +3308,12 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
+@@ -2863,13 +2896,15 @@
+ }
+ 
+ static bool should_blur_node_extend_damage(struct wlr_scene_node *node,
+-		struct fx_gles_render_pass *fx_pass, struct blur_data *blur_data) {
++		struct fx_gles_render_pass *fx_pass, struct blur_data *blur_data,
++		struct wlr_scene *scene) {
+ 	switch (node->type) {
+ 	case WLR_SCENE_NODE_BLUR:;
+ 		struct wlr_scene_blur *blur_node = wlr_scene_blur_from_node(node);
+ 		// No artifact prevention needed when the whole blur is already
+ 		// rendered
+ 		if (blur_node->should_only_blur_bottom_layer && blur_node->strength == 1.0) {
++			set_all_optimized_blur_nodes_dirty(&scene->tree.node);
+ 			fx_pass->has_blur = true;
+ 			return false;
+ 		}
+@@ -3290,9 +3325,12 @@
  	wlr_damage_ring_rotate_buffer(&scene_output->damage_ring, buffer,
  		&render_data.damage);
  
@@ -304,3 +370,13 @@ index 9a9fcc0..9b3e6e1 100644
  			&& pixman_region32_not_empty(&render_data.damage)) {
  		// Blur artifact prevention
  		// Note: Supports individual blur node blur_data
+@@ -3323,7 +3361,8 @@
+ 			struct render_list_entry *entry = &list_data[i];
+ 			struct wlr_scene_node *node = entry->node;
+ 			struct blur_data blur_data = scene_output->scene->blur_data;
+-			if (!should_blur_node_extend_damage(node, fx_pass, &blur_data)) {
++			if (!should_blur_node_extend_damage(node, fx_pass, &blur_data,
++					scene_output->scene)) {
+ 				continue;
+ 			}
+ 
