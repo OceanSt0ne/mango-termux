@@ -261,11 +261,13 @@ struct wlr_renderer *termux_zink_renderer_create(void) {
 	}
 
 	fx_renderer_set_buffer_egl_image_provider(zink_ahb_egl_image);
+	fx_renderer_set_buffer_dmabuf_provider(termux_ahb_buffer_get_dmabuf);
 
 	renderer = fx_renderer_create_with_egl(zink_display, context);
 	if (renderer == NULL) {
 		wlr_log(WLR_ERROR, "Zink: FX renderer creation failed");
 		fx_renderer_set_buffer_egl_image_provider(NULL);
+		fx_renderer_set_buffer_dmabuf_provider(NULL);
 	}
 
 out:
