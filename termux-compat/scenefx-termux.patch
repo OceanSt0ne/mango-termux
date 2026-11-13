@@ -101,6 +101,16 @@ diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
 index 39b6226..65bc367 100644
 --- a/render/fx_renderer/fx_pass.c
 +++ b/render/fx_renderer/fx_pass.c
+@@ -78,7 +78,7 @@
+ 			&pass->fx_offscreen_buffers->effects_buffer, &failed);
+ 	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
+ 			&pass->fx_offscreen_buffers->effects_buffer_swapped, &failed);
+-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
++	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
+ 			&pass->fx_offscreen_buffers->optimized_blur_buffer, &failed);
+-	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
++	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
+ 			&pass->fx_offscreen_buffers->optimized_no_blur_buffer, &failed);
 @@ -145,6 +145,10 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
  		if (!ok) {
  			goto out;
