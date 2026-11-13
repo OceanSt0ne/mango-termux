@@ -40,13 +40,17 @@ command -v Xwayland >/dev/null 2>&1 || missing="$missing xwayland"
 # Termux's mesa package ships gbm.pc/libgbm, but gbm.h lives in mesa-dev.
 # Missing it makes scenefx fail with "fatal error: 'gbm.h' file not found".
 [[ -f "$PREFIX/include/gbm.h" ]] || missing="$missing mesa-dev"
+# Mesa Zink (OpenGL on Vulkan) plus the Freedreno Vulkan ICD (Turnip).
+[[ -e "$PREFIX/lib/dri/zink_dri.so" ]] || missing="$missing mesa"
+[[ -f "$PREFIX/lib/libvulkan_freedreno.so" ]] || \
+  missing="$missing mesa-vulkan-icd-freedreno"
 if [[ -n "$missing" ]]; then
   echo "Missing build dependencies:$missing"
   echo "Install e.g.: pkg install clang pkg-config ninja patchelf git python-pip \\"
   echo "  wlroots libwayland libwayland-protocols libxkbcommon libpixman \\"
   echo "  libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \\"
-  echo "  libglvnd-dev mesa mesa-dev littlecms vulkan-loader \\"
-  echo "  pcre2 pango cjson libandroid-wordexp"
+  echo "  libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \\"
+  echo "  littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp"
   echo "  python -m pip install meson"
   exit 1
 fi

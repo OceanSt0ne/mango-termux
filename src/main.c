@@ -59,6 +59,7 @@
 #include <wlr/render/pixman.h>
 #include <xcb/xcb.h>
 #include "termux/ahb.h"
+#include "termux/zink.h"
 #endif
 #include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/render/allocator.h>
@@ -616,10 +617,30 @@ static struct wlr_backend *termux_backend_create(struct wl_event_loop *loop,
 }
 #endif
 
+#ifdef TERMUX_BUILD
+static const char *termux_renderer_mode(void) {
+	const char *mode = getenv("MANGO_TERMUX_RENDERER");
+	if (mode != NULL && mode[0] != '\0') {
+		return mode;
+	}
+
+	const char *gpu = getenv("MANGO_TERMUX_GPU");
+	if (gpu != NULL) {
+		if (strcmp(gpu, "0") == 0) {
+			return "pixman";
+		}
+		if (strcmp(gpu, "turnip") == 0 || strcmp(gpu, "zink") == 0) {
+			return "turnip";
+		}
+	}
+	return "ahb";
+}
+#endif
+
 struct wlr_allocator *mango_allocator_create(struct wlr_backend *backend,
 		struct wlr_renderer *renderer) {
 #ifdef TERMUX_BUILD
-	if (termux_ahb_active()) {
+	if (termux_ahb_active() || termux_zink_active()) {
 		struct wlr_allocator *allocator = termux_ahb_allocator_create();
 		if (allocator != NULL) {
 			return allocator;
@@ -635,13 +656,31 @@ struct wlr_renderer *mango_renderer_create(struct wlr_backend *backend) {
 #ifdef TERMUX_BUILD
 	/*
 	 * Termux:X11 does not implement DRI3Open, so a DRM render node is not
-	 * available. Try the Android AHardwareBuffer + system EGL path first:
-	 * it keeps scenefx effects working on the Adreno GPU. If that fails,
-	 * fall back to pixman (no effects, but the compositor still works).
+	 * available. Try the Mesa Zink/Turnip path (GPU rendering through the
+	 * Freedreno Vulkan driver) or the Android AHardwareBuffer + system EGL
+	 * path. Both keep scenefx effects working on the Adreno GPU. If they
+	 * fail, fall back to pixman (no effects, but the compositor still works).
 	 */
 	if (wlr_backend_get_drm_fd(backend) < 0) {
-		if (getenv("MANGO_TERMUX_GPU") == NULL ||
-				strcmp(getenv("MANGO_TERMUX_GPU"), "0") != 0) {
+		const char *mode = termux_renderer_mode();
+		bool want_pixman = strcmp(mode, "pixman") == 0;
+		bool want_turnip = strcmp(mode, "turnip") == 0 ||
+			strcmp(mode, "zink") == 0;
+
+		if (!want_pixman) {
+			if (want_turnip) {
+				struct wlr_renderer *renderer =
+					termux_zink_renderer_create();
+				if (renderer != NULL) {
+					wlr_log(WLR_INFO,
+						"Termux: using Mesa Zink/Turnip renderer");
+					return renderer;
+				}
+				wlr_log(WLR_ERROR,
+					"Termux: Zink/Turnip renderer unavailable, "
+					"falling back to AHardwareBuffer");
+			}
+
 			struct wlr_renderer *renderer = termux_ahb_renderer_create();
 			if (renderer != NULL) {
 				wlr_log(WLR_INFO,

@@ -153,6 +153,25 @@ static bool ahb_buffer_get_dmabuf(struct wlr_buffer *wlr_buffer,
 	return false;
 }
 
+bool termux_ahb_buffer_get_dmabuf(struct wlr_buffer *wlr_buffer,
+		struct wlr_dmabuf_attributes *attribs) {
+	if (!ahb_buffer_is_ours(wlr_buffer)) {
+		return false;
+	}
+
+	struct ahb_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+	*attribs = (struct wlr_dmabuf_attributes){0};
+	attribs->width = wlr_buffer->width;
+	attribs->height = wlr_buffer->height;
+	attribs->format = buffer->drm_format;
+	attribs->modifier = DRM_FORMAT_MOD_INVALID;
+	attribs->n_planes = 1;
+	attribs->fd[0] = buffer->fd;
+	attribs->offset[0] = 0;
+	attribs->stride[0] = buffer->stride;
+	return true;
+}
+
 static bool ahb_buffer_get_shm(struct wlr_buffer *wlr_buffer,
 		struct wlr_shm_attributes *attribs) {
 	struct ahb_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);

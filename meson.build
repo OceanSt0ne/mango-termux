@@ -153,7 +153,7 @@ if not termux_build
   mango_deps += libinput_dep
 else
   mango_deps += wordexp_dep
-  mango_sources += files('termux/ahb.c')
+  mango_sources += files('termux/ahb.c', 'termux/zink.c')
   mango_deps += [
     cc.find_library('android', required : true),
     cc.find_library('EGL', required : true),
