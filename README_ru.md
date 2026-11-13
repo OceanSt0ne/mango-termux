@@ -59,6 +59,10 @@ Termux:GUI больше не используется.
 - `termux/ahb.c`, `termux/ahb.h` — AHardwareBuffer-аллокатор и буферы,
   системный Android EGL/GLES, EGLImage-провайдер для scenefx и отдача
   GPU-буфера в X11 через SHM. Так эффекты работают без DRI3.
+- `termux/zink.c`, `termux/zink.h` — рендерер Mesa Zink + Turnip. Он рисует в
+  те же AHardwareBuffer-ы, импортируя их как DMA-BUF EGLImage, поэтому эффекты
+  идут через GPU Adreno открытым драйвером Freedreno Vulkan, а не через
+  проприетарный Android EGL.
 - `scenefx/` — исходники scenefx 0.5 с уже применённым
   Termux/AHardwareBuffer-патчем.
 - `termux-compat/scenefx-termux.patch` — патч scenefx: pixman-fallback,
@@ -78,8 +82,9 @@ Termux:GUI больше не используется.
 pkg install clang pkg-config ninja patchelf git python-pip \
             wlroots libwayland libwayland-protocols libxkbcommon \
             libpixman libdrm libxcb xcb-util-wm xcb-util-renderutil \
-            xwayland libglvnd-dev mesa mesa-dev littlecms \
-            vulkan-loader pcre2 pango cjson libandroid-wordexp
+            xwayland libglvnd-dev mesa mesa-dev \
+            mesa-vulkan-icd-freedreno littlecms vulkan-loader \
+            pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
 # сервер Termux:X11
@@ -130,8 +135,8 @@ Termux-патчи уже в коммитах, применять их повто
 pkg install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
   libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \
-  libglvnd-dev mesa mesa-dev littlecms vulkan-loader \
-  pcre2 pango cjson libandroid-wordexp
+  libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \
+  littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp
 python -m pip install meson
 
 pkg install x11-repo
@@ -169,6 +174,9 @@ cd ~/Projects/mango-termux
 4. копирует конфиг в `~/.config/mango` (для нового конфига сразу включает
    `blur`, тени и скругления).
 
+Установленный `$PREFIX/bin/mango` — сборка Mesa/Turnip; приватный
+`$PREFIX/lib/mango-termux/mango` — сборка Android EGL/AHardwareBuffer.
+
 Если `scenefx` уже лежит в другом месте:
 
 ```bash
@@ -179,7 +187,8 @@ SCENEFX_DIR=/path/to/scenefx ./build-termux.sh
 `termux-compat/scenefx-termux.patch` автоматически.
 
 Флаг `-Dtermux=true` уже используется скриптом. Ручная сборка ниже даёт
-обычную Mesa/pixman-сборку; для GPU-эффектов нужен `./build-termux.sh`.
+сборку Mesa/Turnip; для пути Android EGL/AHardwareBuffer дополнительно нужен
+приватный бинарник из `./build-termux.sh`.
 
 ```bash
 # scenefx (встроен, патч уже применён)
@@ -225,6 +234,8 @@ mango-termux
 - если сервер не отвечает, стартует `termux-x11 "$DISPLAY" -ac -noreset`,
   ждёт соединения; при застарелом lock/socket убирает их и пробует ещё раз;
 - выставляет `WLR_BACKENDS=x11`;
+- выбирает рендерер: `MANGO_TERMUX_RENDERER=turnip` (по умолчанию) — Mesa
+  Zink + Turnip, `ahb` — Android EGL/AHardwareBuffer, `pixman` — без GPU;
 - даёт mango запустить Xwayland и передать дочерним процессам собственный
   `DISPLAY`, чтобы X11-приложения из mango оставались во вложенной сессии;
 - запускает `$PREFIX/lib/mango-termux/mango` (GPU-эффекты), а если его нет —
@@ -247,6 +258,12 @@ mango-termux -s foot
 
 # перезапустить уже работающий mango
 mango-termux --restart
+
+# Android EGL/AHardwareBuffer вместо Turnip
+MANGO_TERMUX_RENDERER=ahb mango-termux
+
+# программный рендеринг (без GPU-эффектов)
+MANGO_TERMUX_RENDERER=pixman mango-termux
 ```
 
 ### Повторный запуск после перезахода в Termux
@@ -340,12 +357,13 @@ foot
 
 - при рабочем DRI3 (`wlr_backend_get_drm_fd() >= 0`) используется FX-рендерер
   scenefx;
-- в Termux:X11 `DRI3Open` не отдаёт DRM-fd, поэтому `mango-termux` запускает
-  приватную сборку, которая создаёт FX-рендерер scenefx на **системном
-  Android EGL** (Adreno) и рендерит в **AHardwareBuffer**. Буфер отдаётся
-  X11-серверу через SHM с учётом выровненного stride;
-- если системный EGL/AHardwareBuffer недоступен, автоматически включается
-  `pixman` и scenefx рисует сцену без эффектов.
+- в Termux:X11 `DRI3Open` не отдаёт DRM-fd. По умолчанию `mango-termux`
+  создаёт FX-рендерер scenefx на **Mesa Zink + Turnip** (Freedreno Vulkan) и
+  рендерит в **AHardwareBuffer-ы**, импортируемые как DMA-BUF EGLImage.
+  `MANGO_TERMUX_RENDERER=ahb` использует **системный Android EGL** (Adreno);
+- буфер отдаётся X11-серверу через SHM с учётом выровненного stride;
+- если GPU-рендеринг недоступен, автоматически включается `pixman` и scenefx
+  рисует сцену без эффектов.
 
 ### Эффекты
 
@@ -360,27 +378,38 @@ border_radius=12
 ```
 
 При запуске через `mango-termux` они работают на GPU (blur, тени, скруглённые
-углы, анимации). Проверить, что выбран GPU-путь:
+углы, анимации). Проверить, что выбран путь Turnip:
 
 ```bash
-MANGO_TERMUX_GPU=1 mango-termux --restart -d 2>&1 | grep -E 'AHB|FX renderer|pixman'
+MANGO_TERMUX_RENDERER=turnip mango-termux --restart -d 2>&1 | \
+  grep -E 'Zink|Turnip|AHB|FX renderer|pixman'
+```
+
+Чтобы использовать путь Android EGL/AHardwareBuffer:
+
+```bash
+MANGO_TERMUX_RENDERER=ahb mango-termux
 ```
 
 Принудительно вернуться к pixman (без эффектов, для диагностики):
 
 ```bash
-MANGO_TERMUX_GPU=0 mango-termux
+MANGO_TERMUX_RENDERER=pixman mango-termux
 ```
 
-Прямой запуск `$PREFIX/bin/mango` использует Termux-Mesa и остаётся
-pixman-путём; для эффектов нужен именно `mango-termux`.
+Прямой запуск `$PREFIX/bin/mango` не выставляет окружение рендерера;
+используйте `mango-termux` или явно задайте
+`MANGO_TERMUX_RENDERER=turnip`.
 
 ### Ограничения
 
 - В Termux нет DRM/libinput/session-бэкендов — так собран `wlroots-0.20`.
-- Termux:X11 не отдаёт DRI3 DRM-fd. Эффекты работают через системный Android
-  EGL + AHardwareBuffer, а не через DRI3. Это требует Android с рабочим
-  `/system/lib64/libEGL.so` и поддержкой AHardwareBuffer; иначе — pixman.
+- Termux:X11 не отдаёт DRI3 DRM-fd. Эффекты работают через AHardwareBuffer и
+  либо Mesa Zink + Turnip, либо системный Android EGL. Путь AHB требует
+  рабочего `/system/lib64/libEGL.so`; путь Turnip — пакета
+  `mesa-vulkan-icd-freedreno`. Иначе используется pixman.
+- Turnip/Zink добавляет слой трансляции в Vulkan; на некоторых нагрузках путь
+  Android EGL/AHardwareBuffer может быть быстрее.
 - На очень больших разрешениях копирование AHB в SHM для X11 может быть
   узким местом.
 - XWayland включён. X11-приложения, запущенные из mango, используют его
@@ -393,6 +422,11 @@ pixman-путём; для эффектов нужен именно `mango-termux
 - `Failed to open DRI3` / `Disabling DMA-BUF support` — нормально для
   Termux:X11. `mango-termux` не использует DRI3: эффекты идут через
   системный Android EGL + AHardwareBuffer.
+- `GL renderer: zink Vulkan ... Turnip ...` — активен Mesa Zink + Turnip.
+- `Termux: Zink/Turnip renderer unavailable` — проверьте Freedreno ICD:
+  `VK_ICD_FILENAMES=$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json vulkaninfo --summary`
+  и наличие пакета `mesa-vulkan-icd-freedreno`. После этого mango перейдёт на
+  AHB или pixman.
 - `Termux: AHB/EGL renderer unavailable, falling back to pixman` — не найден
   системный EGL/AHardwareBuffer или приватные библиотеки. Пересоберите
   `./build-termux.sh` (нужен `patchelf`) и запускайте `mango-termux`.

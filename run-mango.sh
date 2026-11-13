@@ -10,11 +10,14 @@
 # sockets and can tell a live Termux:X11 server from a leftover socket.
 #
 # Environment:
-#   MANGO_BACKEND     x11 (default) | wayland | headless
-#   MANGO_X11_DISPLAY X display to use (default: $DISPLAY or :0)
-#   MANGO_BIN         path to the mango binary (default: GPU build, installed mango or ./build/mango)
-#   MANGO_TERMUX_GPU  1 (default) = Android EGL/AHardwareBuffer effects, 0 = pixman
-#   MANGO_RESTART     1 = stop a running mango before starting a new one
+#   MANGO_BACKEND          x11 (default) | wayland | headless
+#   MANGO_X11_DISPLAY      X display to use (default: $DISPLAY or :0)
+#   MANGO_BIN              path to the mango binary (default: installed mango,
+#                          private GPU build, or ./build/mango)
+#   MANGO_TERMUX_RENDERER  turnip (default) = Mesa Zink + Turnip,
+#                          ahb = Android EGL/AHardwareBuffer, pixman = software
+#   MANGO_TERMUX_GPU       compatibility: 1 = ahb, 0 = pixman, turnip/zink = turnip
+#   MANGO_RESTART          1 = stop a running mango before starting a new one
 set -euo pipefail
 
 # Resolve the script location so dev fallbacks work from any cwd and through
@@ -25,15 +28,44 @@ if command -v readlink >/dev/null 2>&1; then
 fi
 script_dir="$(cd "$(dirname "$self_path")" && pwd)"
 
-# Prefer the private GPU build created by build-termux.sh. It links against
-# Android's EGL/GLES and AHardwareBuffer, so scenefx effects work even though
-# Termux:X11 does not expose a DRI3 DRM fd. The normal $PREFIX/bin/mango stays
-# as a Mesa/pixman fallback.
 prefix="${PREFIX:-/data/data/com.termux/files/usr}"
 priv_bin="$prefix/lib/mango-termux/mango"
-if [[ -z "${MANGO_BIN:-}" && -x "$priv_bin" ]]; then
-  MANGO_BIN="$priv_bin"
+
+# Pick the renderer before the binary: the Turnip path needs Termux Mesa
+# (Zink), while the AHB path needs the private binary patched to Android's
+# system EGL/GLES.
+renderer="${MANGO_TERMUX_RENDERER:-}"
+if [[ -z "$renderer" ]]; then
+  case "${MANGO_TERMUX_GPU:-}" in
+    0) renderer=pixman ;;
+    1|ahb) renderer=ahb ;;
+    *) renderer=turnip ;;
+  esac
+fi
+export MANGO_TERMUX_RENDERER="$renderer"
+
+if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
+  # Mesa Zink on top of the Freedreno Vulkan driver (Turnip). Use the normal
+  # Termux Mesa binary, not the private Android-EGL build.
+  export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json}"
+  export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-zink}"
+  export GALLIUM_DRIVER="${GALLIUM_DRIVER:-zink}"
+  export EGL_PLATFORM="${EGL_PLATFORM:-surfaceless}"
+  if [[ -z "${MANGO_BIN:-}" ]]; then
+    if [[ -x "$prefix/bin/mango" ]]; then
+      MANGO_BIN="$prefix/bin/mango"
+    elif [[ -x "$script_dir/build/mango" ]]; then
+      MANGO_BIN="$script_dir/build/mango"
+    fi
+  fi
+elif [[ "$renderer" == "ahb" ]]; then
+  if [[ -z "${MANGO_BIN:-}" && -x "$priv_bin" ]]; then
+    MANGO_BIN="$priv_bin"
+  fi
   export MANGO_TERMUX_GPU="${MANGO_TERMUX_GPU:-1}"
+else
+  # pixman: use the normal Mesa binary and force software rendering.
+  export MANGO_TERMUX_GPU=0
 fi
 
 if [[ "${1:-}" == "--restart" ]]; then

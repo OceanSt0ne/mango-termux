@@ -4,6 +4,8 @@
 #include <stdbool.h>
 
 struct wlr_allocator;
+struct wlr_buffer;
+struct wlr_dmabuf_attributes;
 struct wlr_renderer;
 
 /*
@@ -25,5 +27,13 @@ struct wlr_allocator *termux_ahb_allocator_create(void);
 
 /* True once the Android EGL/FX renderer was created successfully. */
 bool termux_ahb_active(void);
+
+/*
+ * Export an AHardwareBuffer-backed wlr_buffer as DMA-BUF attributes. This is
+ * used by the Mesa Turnip/Zink renderer, which imports the buffer through
+ * EGL_EXT_image_dma_buf_import instead of the Android EGL native-buffer path.
+ */
+bool termux_ahb_buffer_get_dmabuf(struct wlr_buffer *buffer,
+	struct wlr_dmabuf_attributes *attribs);
 
 #endif
