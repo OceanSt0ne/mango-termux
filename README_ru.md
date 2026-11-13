@@ -363,10 +363,13 @@ foot
   `MANGO_TERMUX_RENDERER=ahb` использует **системный Android EGL** (Adreno);
 - буфер отдаётся X11-серверу через SHM с учётом выровненного stride;
 - переменные Mesa/Vulkan действуют только на создание рендерера mango,
-  поэтому дочерние GL-клиенты (Ghostty, Kitty и т.п.) сохраняют обычный выбор
-  драйвера и платформы. В Termux Mesa это обычно llvmpipe; приложения внутри
-  proot используют собственную Mesa (например, Noctalia в Arch показывает
-  llvmpipe) и не могут задействовать Termux-драйвер Turnip;
+  поэтому дочерние GL-клиенты используют приватную Mesa 27 с нативным
+  Freedreno/KGSL (`FD735`). С патченным Xwayland X11-клиенты получают DRI3 и
+  тот же native KGSL вместо llvmpipe; см.
+  [Xwayland на KGSL](#xwayland-на-kgsl). Noctalia внутри Arch-proot использует
+  Mesa 27 с нативным Freedreno/KGSL (`renderer="FD735"`) по умолчанию; см.
+  [руководство по Noctalia](TERMUX_NOCTALIA_ru.md). `NOCTALIA_GPU=0` оставляет
+  запасной llvmpipe.
 - AHB/offscreen-буферы сэмплируются через их EGLImage/DMA-BUF, а не через
   CPU-копию, поэтому blur в scenefx читает уже отрисованную GPU сцену.
   Оптимизированный blur обновляется при повреждении области blur, так что
@@ -426,12 +429,51 @@ MANGO_TERMUX_RENDERER=pixman mango-termux
   внешним `DISPLAY` (`:0`) по-прежнему открываются прямо в Termux:X11.
 - `chvt`/переключение виртуальных терминалов недоступно.
 
+### Xwayland на KGSL
+
+Штатный Xwayland в Termux собран с `-Dglamor=false`, поэтому X11-клиенты
+внутри mango не имеют DRI3/GLX и используют llvmpipe. `run-mango.sh`
+автоматически берёт патченный сервер из
+`$PREFIX/opt/xwayland-kgsl/bin/Xwayland`, если он установлен:
+
+- glamor/DRI3 включаются на `/dev/kgsl-3d0` без `/dev/dri` и `wl_drm`;
+- обёртка запускает сервер Xwayland с приватной Mesa 27 из
+  `$PREFIX/opt/mesa-kgsl` (`MESA_LOADER_DRIVER_OVERRIDE=zink`,
+  `GALLIUM_DRIVER=zink`, `FD_KGSL_DMABUF=1`);
+- X11-клиенты наследуют нативный путь Mesa 27 из сессии
+  (`MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) и рендерят
+  напрямую через Freedreno/KGSL; глобальный Zink специально не экспортируется,
+  потому что с ним некорректно работает GTK4/Ghostty;
+- линейные KGSL-буферы экспортируются как `DRM_FORMAT_MOD_LINEAR`, поэтому
+  композитор импортирует их, а не показывает чёрные окна.
+
+Проверка из терминала внутри mango:
+
+```sh
+DISPLAY=:1 glxinfo -B | grep -E 'Accelerated|OpenGL renderer'
+# Accelerated: yes
+# OpenGL renderer string: FD735
+```
+
+Для одноразовой диагностики через Zink/Turnip:
+
+```sh
+MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink glxinfo -B
+# OpenGL renderer string: zink Vulkan 1.4(Turnip Adreno (TM) 735 ...)
+```
+
+Путь можно переопределить через `WLR_XWAYLAND=/path/to/Xwayland`.
+
 ### Диагностика
 
 - `Failed to open DRI3` / `Disabling DMA-BUF support` — нормально для
   Termux:X11. `mango-termux` не использует DRI3: эффекты идут через
   системный Android EGL + AHardwareBuffer.
-- `GL renderer: zink Vulkan ... Turnip ...` — активен Mesa Zink + Turnip.
+- `OpenGL renderer string: FD735` — для сессии и X11-клиентов активен
+  нативный Freedreno/KGSL.
+- `OpenGL renderer string: zink Vulkan ... Turnip ...` — активен Zink/Turnip;
+  это ожидаемо для рендерера самого mango или при явном запросе для
+  диагностической команды.
 - `Termux: Zink/Turnip renderer unavailable` — проверьте Freedreno ICD:
   `VK_ICD_FILENAMES=$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json vulkaninfo --summary`
   и наличие пакета `mesa-vulkan-icd-freedreno`. После этого mango перейдёт на

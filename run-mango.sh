@@ -31,6 +31,14 @@ script_dir="$(cd "$(dirname "$self_path")" && pwd)"
 prefix="${PREFIX:-/data/data/com.termux/files/usr}"
 priv_bin="$prefix/lib/mango-termux/mango"
 
+# Xwayland on the KGSL GPU: use the patched server when it is installed.
+# Its wrapper selects the private Mesa build (Zink on Turnip) and DRI3 over
+# /dev/kgsl-3d0; the stock Termux Xwayland has no DRI3 and falls back to
+# llvmpipe for every X11 client.
+if [[ -z "${WLR_XWAYLAND:-}" && -x "$prefix/opt/xwayland-kgsl/bin/Xwayland" ]]; then
+  export WLR_XWAYLAND="$prefix/opt/xwayland-kgsl/bin/Xwayland"
+fi
+
 # Pick the renderer before the binary: the Turnip path needs Termux Mesa
 # (Zink), while the AHB path needs the private binary patched to Android's
 # system EGL/GLES.
@@ -45,10 +53,29 @@ fi
 export MANGO_TERMUX_RENDERER="$renderer"
 
 if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
-  # Mesa Zink on top of the Freedreno Vulkan driver (Turnip). Use the normal
-  # Termux Mesa binary, not the private Android-EGL build. mango sets the Mesa
-  # variables only while creating its own renderer, so GL clients keep their
-  # normal environment.
+  # The compositor itself uses Zink+Turnip, but Zink is a bad default for all
+  # child processes: GTK4/Ghostty renders incorrectly with a global zink
+  # override.  Give the session Mesa's native Freedreno/KGSL build instead.
+  # termux/zink.c saves/restores these variables around mango's own renderer,
+  # so mango still creates its Zink/Turnip context.
+  mesa="$prefix/opt/mesa-kgsl"
+  if [[ -d "$mesa/lib" ]]; then
+    export LD_LIBRARY_PATH="$mesa/lib"
+    export LIBGL_DRIVERS_PATH="$mesa/lib/dri"
+    export GBM_BACKENDS_PATH="$mesa/lib/gbm"
+    export MESA_LOADER_DRIVER_OVERRIDE=kgsl
+    export GALLIUM_DRIVER=kgsl
+    unset VK_DRIVER_FILES VK_ICD_FILENAMES
+  else
+    # Fallback: let host Mesa choose; do not leak a stale zink override.
+    unset LD_LIBRARY_PATH LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH
+    unset MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER
+    unset VK_DRIVER_FILES VK_ICD_FILENAMES
+  fi
+  # Mesa Zink on top of the Freedreno Vulkan driver (Turnip). The private
+  # Mesa 27 build supplies both Zink and the native KGSL driver; termux/zink.c
+  # sets the Zink variables only while creating mango's own renderer and then
+  # restores the native KGSL session environment.
   if [[ -z "${MANGO_BIN:-}" ]]; then
     if [[ -x "$prefix/bin/mango" ]]; then
       MANGO_BIN="$prefix/bin/mango"

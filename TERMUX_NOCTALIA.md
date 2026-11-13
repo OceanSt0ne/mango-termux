@@ -118,6 +118,39 @@ proot-distro login archlinuxarm -- noctalia --version
 > The container runs as root. Noctalia configs live in
 > `/root/.config/noctalia` and `/root/.local/state/noctalia`.
 
+### GPU acceleration in the proot (Freedreno + KGSL)
+
+Arch's stock `mesa`/`vulkan-freedreno` is built for DRM/MSM and cannot drive
+Android's `/dev/kgsl-3d0`. Install the lfdevs Mesa 27 Arch packages, which
+include the KGSL Freedreno Gallium driver:
+
+```sh
+cd "$PREFIX/tmp"
+gh release download mesa-27.0.0-devel-20261025-r2 \
+  -R lfdevs/mesa-for-android-container \
+  -p '*archlinux_arm64.tar' --clobber
+tar -xf mesa-for-android-container_*_archlinux_arm64.tar
+proot-distro login archlinuxarm -- bash -lc '
+  pacman -U --noconfirm --overwrite="/usr/lib/libvulkan_freedreno.so" \
+    --overwrite="/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json" \
+    /data/data/com.termux/files/usr/tmp/mesa-1:27.0.0-92-aarch64.pkg.tar.xz \
+    /data/data/com.termux/files/usr/tmp/vulkan-freedreno-1:27.0.0-92-aarch64.pkg.tar.xz
+  ldconfig'
+```
+
+Noctalia then renders natively through `FD735` instead of llvmpipe. The launch
+script uses `MESA_LOADER_DRIVER_OVERRIDE=kgsl` and `GALLIUM_DRIVER=kgsl`
+(`NOCTALIA_GPU=kgsl`, the default). `NOCTALIA_GPU=0` forces llvmpipe as a safe
+fallback; `NOCTALIA_GPU=zink` is the older experimental path and is not needed.
+
+Verify the renderer:
+
+```sh
+grep 'OpenGL ES vendor' "$PREFIX/tmp/mango.log"
+# ... vendor="freedreno" renderer="FD735" — GPU path
+# ... renderer="llvmpipe (LLVM ...)" — software fallback
+```
+
 ---
 
 ## 3. Noctalia launch script
@@ -135,13 +168,46 @@ set -euo pipefail
 : "${PREFIX:=/data/data/com.termux/files/usr}"
 : "${XDG_RUNTIME_DIR:=${TMPDIR:-/tmp}}"
 : "${WAYLAND_DISPLAY:=wayland-0}"
+: "${NOCTALIA_GPU:=kgsl}"
 
-exec proot-distro login archlinuxarm --shared-tmp \
+case "$NOCTALIA_GPU" in
+  0|llvmpipe)
+    renderer_env=(
+      MESA_LOADER_DRIVER_OVERRIDE="llvmpipe"
+      GALLIUM_DRIVER="llvmpipe"
+    )
+    ;;
+  zink)
+    renderer_env=(
+      MESA_LOADER_DRIVER_OVERRIDE="zink"
+      GALLIUM_DRIVER="zink"
+      VK_DRIVER_FILES="/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+      VK_ICD_FILENAMES="/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+    )
+    ;;
+  *)
+    renderer_env=(
+      MESA_LOADER_DRIVER_OVERRIDE="kgsl"
+      GALLIUM_DRIVER="kgsl"
+    )
+    ;;
+esac
+
+exec env \
+  -u MESA_LOADER_DRIVER_OVERRIDE \
+  -u GALLIUM_DRIVER \
+  -u VK_DRIVER_FILES \
+  -u VK_ICD_FILENAMES \
+  -u LD_LIBRARY_PATH \
+  -u LIBGL_DRIVERS_PATH \
+  -u GBM_BACKENDS_PATH \
+  proot-distro login archlinuxarm --shared-tmp \
   --bind "$XDG_RUNTIME_DIR:$XDG_RUNTIME_DIR" \
   -- env \
   WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
   XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
   XDG_DATA_DIRS="/usr/local/share:/usr/share:$PREFIX/share" \
+  "${renderer_env[@]}" \
   MANGO_INSTANCE_SIGNATURE="${MANGO_INSTANCE_SIGNATURE:-}" \
   dbus-run-session -- noctalia
 ```
@@ -160,6 +226,14 @@ What matters here:
   focus, output power, keyboard layout, session shutdown).
 - `XDG_DATA_DIRS=...:$PREFIX/share` — Termux apps' `.desktop` files appear in
   the launcher.
+- `NOCTALIA_GPU=kgsl` (default) — native Freedreno/KGSL via Mesa 27; use
+  `NOCTALIA_GPU=0` for the llvmpipe fallback and `NOCTALIA_GPU=zink` only for
+  the old experimental Zink path.
+- The `env -u ...` wrapper clears host Mesa, Vulkan and library-path variables
+  before entering the proot, so Arch uses its own Mesa 27 rather than Termux's
+  private KGSL build.
+- `VK_DRIVER_FILES` / `VK_ICD_FILENAMES` — only set for `NOCTALIA_GPU=zink`;
+  the KGSL path uses the Gallium driver directly and does not need Vulkan.
 - `dbus-run-session` — starts Noctalia with its own session bus.
 
 ---
@@ -376,8 +450,9 @@ Does not work or works partially:
 - system D-Bus: no upower, NetworkManager, logind, or polkit agent;
 - PipeWire: audio in Noctalia may be unavailable;
 - Secret Service / keyring: secret storage and part of clipboard history;
-- Noctalia renders through Mesa llvmpipe (software), so the UI may be slower
-  than on native Linux;
+- Noctalia renders through native Freedreno/KGSL (`FD735`) with the lfdevs
+  Mesa 27 packages. Without them, use `NOCTALIA_GPU=0` for llvmpipe; the old
+  Zink path may fall back to SHM and render black;
 - Android apps do not appear in the launcher automatically. They need separate
   `.desktop` wrappers using `am start` / `termux-open`; they will open as
   Android windows, not inside mango.
@@ -437,6 +512,23 @@ proot-distro login archlinuxarm -- \
      MANGO_INSTANCE_SIGNATURE="$(ls "$PREFIX/tmp"/mango-*.sock | head -1)" \
      ~/.config/mango/start-noctalia.sh
    ```
+
+### Noctalia is black / renders with `llvmpipe`
+
+`renderer="FD735"` is the expected GPU path; `renderer="llvmpipe"` means the
+lfdevs Mesa 27 packages are missing or `NOCTALIA_GPU=0` is set:
+
+```sh
+grep 'OpenGL ES vendor' "$PREFIX/tmp/mango.log"
+# ... vendor="freedreno" renderer="FD735" — GPU
+```
+
+If only llvmpipe is available, install the lfdevs Mesa 27 packages from the
+section above, or explicitly force the stable software path:
+
+```sh
+NOCTALIA_GPU=0 ~/.config/mango/start-noctalia.sh
+```
 
 ### The log says `workspace backend=ext-workspace`, not `mango-ipc`
 
