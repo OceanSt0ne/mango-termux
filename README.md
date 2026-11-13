@@ -366,6 +366,9 @@ Rendering:
   (Adreno) driver instead;
 - the buffer is handed to the X11 server over SHM, accounting for the aligned
   stride;
+- Mesa/Vulkan variables are scoped to mango's own renderer creation, so child
+  GL clients (Ghostty, Kitty, etc.) keep their normal driver and platform
+  selection;
 - if GPU rendering is unavailable, `pixman` is enabled automatically and
   scenefx renders the scene without effects.
 

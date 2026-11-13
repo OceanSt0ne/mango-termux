@@ -46,11 +46,9 @@ export MANGO_TERMUX_RENDERER="$renderer"
 
 if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
   # Mesa Zink on top of the Freedreno Vulkan driver (Turnip). Use the normal
-  # Termux Mesa binary, not the private Android-EGL build.
-  export VK_ICD_FILENAMES="${VK_ICD_FILENAMES:-$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json}"
-  export MESA_LOADER_DRIVER_OVERRIDE="${MESA_LOADER_DRIVER_OVERRIDE:-zink}"
-  export GALLIUM_DRIVER="${GALLIUM_DRIVER:-zink}"
-  export EGL_PLATFORM="${EGL_PLATFORM:-surfaceless}"
+  # Termux Mesa binary, not the private Android-EGL build. mango sets the Mesa
+  # variables only while creating its own renderer, so GL clients keep their
+  # normal environment.
   if [[ -z "${MANGO_BIN:-}" ]]; then
     if [[ -x "$prefix/bin/mango" ]]; then
       MANGO_BIN="$prefix/bin/mango"

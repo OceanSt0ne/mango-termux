@@ -33,13 +33,47 @@ static EGLConfig zink_config = EGL_NO_CONFIG_KHR;
 static PFNEGLCREATEIMAGEKHRPROC zink_create_image;
 static bool zink_active;
 
-static void set_default_env(const char *name, const char *value) {
-	if (getenv(name) == NULL) {
+/*
+ * The Mesa/Vulkan variables are needed only while mango creates its own EGL
+ * context. Leaving them in the environment makes every child process use Zink
+ * and the surfaceless platform too, which breaks GL clients such as Ghostty.
+ */
+struct zink_env {
+	char *vk_icd;
+	char *mesa_loader;
+	char *gallium;
+	char *egl_platform;
+};
+
+static char *save_env(const char *name) {
+	const char *value = getenv(name);
+	return value != NULL ? strdup(value) : NULL;
+}
+
+static void restore_env(const char *name, char *value) {
+	if (value != NULL) {
 		setenv(name, value, 1);
+		free(value);
+	} else {
+		unsetenv(name);
 	}
 }
 
-static void set_zink_env(void) {
+static void zink_env_save(struct zink_env *env) {
+	env->vk_icd = save_env("VK_ICD_FILENAMES");
+	env->mesa_loader = save_env("MESA_LOADER_DRIVER_OVERRIDE");
+	env->gallium = save_env("GALLIUM_DRIVER");
+	env->egl_platform = save_env("EGL_PLATFORM");
+}
+
+static void zink_env_restore(struct zink_env *env) {
+	restore_env("VK_ICD_FILENAMES", env->vk_icd);
+	restore_env("MESA_LOADER_DRIVER_OVERRIDE", env->mesa_loader);
+	restore_env("GALLIUM_DRIVER", env->gallium);
+	restore_env("EGL_PLATFORM", env->egl_platform);
+}
+
+static void zink_env_apply(void) {
 	const char *prefix = getenv("PREFIX");
 	if (prefix == NULL || prefix[0] == '\0') {
 		prefix = "/data/data/com.termux/files/usr";
@@ -49,12 +83,15 @@ static void set_zink_env(void) {
 	int len = snprintf(icd, sizeof(icd),
 		"%s/share/vulkan/icd.d/freedreno_icd.aarch64.json", prefix);
 	if (len > 0 && (size_t)len < sizeof(icd) && access(icd, R_OK) == 0) {
-		set_default_env("VK_ICD_FILENAMES", icd);
+		setenv("VK_ICD_FILENAMES", icd, 1);
+	} else {
+		wlr_log(WLR_ERROR,
+			"Zink: Freedreno Vulkan ICD not found under %s", prefix);
 	}
 
-	set_default_env("MESA_LOADER_DRIVER_OVERRIDE", "zink");
-	set_default_env("GALLIUM_DRIVER", "zink");
-	set_default_env("EGL_PLATFORM", "surfaceless");
+	setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1);
+	setenv("GALLIUM_DRIVER", "zink", 1);
+	setenv("EGL_PLATFORM", "surfaceless", 1);
 }
 
 static EGLImageKHR zink_ahb_egl_image(struct wlr_buffer *wlr_buffer) {
@@ -133,8 +170,6 @@ static EGLImageKHR zink_ahb_egl_image(struct wlr_buffer *wlr_buffer) {
 }
 
 static bool zink_egl_init(void) {
-	set_zink_env();
-
 	zink_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
 	if (zink_display == EGL_NO_DISPLAY) {
 		wlr_log(WLR_ERROR, "Zink: eglGetDisplay failed");
@@ -200,10 +235,15 @@ static bool zink_egl_init(void) {
 }
 
 struct wlr_renderer *termux_zink_renderer_create(void) {
+	struct zink_env env;
+	struct wlr_renderer *renderer = NULL;
+
 	zink_active = false;
+	zink_env_save(&env);
+	zink_env_apply();
 
 	if (!zink_egl_init()) {
-		return NULL;
+		goto out;
 	}
 
 	const EGLint context_attribs[] = {
@@ -217,20 +257,20 @@ struct wlr_renderer *termux_zink_renderer_create(void) {
 			eglGetError());
 		eglTerminate(zink_display);
 		zink_display = EGL_NO_DISPLAY;
-		return NULL;
+		goto out;
 	}
 
 	fx_renderer_set_buffer_egl_image_provider(zink_ahb_egl_image);
 
-	struct wlr_renderer *renderer =
-		fx_renderer_create_with_egl(zink_display, context);
+	renderer = fx_renderer_create_with_egl(zink_display, context);
 	if (renderer == NULL) {
 		wlr_log(WLR_ERROR, "Zink: FX renderer creation failed");
 		fx_renderer_set_buffer_egl_image_provider(NULL);
-		return NULL;
 	}
 
-	zink_active = true;
+out:
+	zink_env_restore(&env);
+	zink_active = renderer != NULL;
 	return renderer;
 }
 
