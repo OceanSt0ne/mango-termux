@@ -1,0 +1,49 @@
+#!/data/data/com.termux/files/usr/bin/bash
+#
+# Run a GPU client with the private Mesa 27 Zink/Turnip stack.
+#
+# KGSL Gallium is the default for the MangoWM session because it is fast for
+# native clients, but some applications (notably Firefox/WebGL) need the
+# DMA-BUF-capable Zink path. This wrapper selects Zink/Turnip only for the
+# process it launches.
+#
+# Usage:
+#   mango-gpu-run <command> [arguments...]
+set -euo pipefail
+
+prefix="${PREFIX:-/data/data/com.termux/files/usr}"
+mesa="${MESA_KGSL_DIR:-$prefix/opt/mesa-kgsl}"
+
+if [[ ! -f "$mesa/lib/dri/zink_dri.so" ||
+      ! -f "$mesa/lib/libgallium-27.0.0-devel.so" ]]; then
+	echo "error: private Mesa 27 Zink stack not found in $mesa" >&2
+	echo "  Run termux-compat/install-freedreno-kgsl.sh first." >&2
+	exit 1
+fi
+
+export LD_LIBRARY_PATH="$mesa/lib"
+export LIBGL_DRIVERS_PATH="$mesa/lib/dri"
+export GBM_BACKENDS_PATH="$mesa/lib/gbm"
+export MESA_LOADER_DRIVER_OVERRIDE=zink
+export GALLIUM_DRIVER=zink
+export FD_KGSL_DMABUF=1
+
+if [[ -f "$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
+	export VK_DRIVER_FILES="$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+	export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+else
+	unset VK_DRIVER_FILES VK_ICD_FILENAMES
+fi
+
+if [[ -f "$mesa/share/glvnd/egl_vendor.d/50_mesa.json" ]]; then
+	export __EGL_VENDOR_LIBRARY_FILENAMES="$mesa/share/glvnd/egl_vendor.d/50_mesa.json"
+fi
+
+unset EGL_PLATFORM LIBGL_ALWAYS_SOFTWARE MESA_GL_VERSION_OVERRIDE
+
+if (($# == 0)); then
+	echo "usage: mango-gpu-run <command> [arguments...]" >&2
+	exit 1
+fi
+
+exec "$@"
