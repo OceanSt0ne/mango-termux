@@ -13,6 +13,7 @@
 #   SCENEFX_DIR     alternative scenefx source tree (default: <repository>/scenefx)
 #   MANGO_SKIP_KGSL 1 = do not install the private Freedreno/KGSL Mesa 27 stack
 #   MANGO_SKIP_FIREFOX_FIX 1 = do not install the Firefox WebGL wrapper
+#   MANGO_SKIP_NOCTALIA_BRIDGE 1 = do not install the Noctalia host bridge
 set -euo pipefail
 
 # Resolve our own path so the script works from any cwd and through symlinks.
@@ -197,6 +198,16 @@ if [[ "${MANGO_SKIP_FIREFOX_FIX:-0}" != "1" &&
   if ! "$self_dir/termux-compat/install-firefox-webgl.sh"; then
     echo "warning: Firefox WebGL wrapper was not installed." >&2
     echo "  Run manually: $self_dir/termux-compat/install-firefox-webgl.sh" >&2
+  fi
+fi
+
+if [[ "${MANGO_SKIP_NOCTALIA_BRIDGE:-0}" != "1" &&
+      -d "$PREFIX/var/lib/proot-distro/containers" ]]; then
+  echo
+  echo "Installing Noctalia host bridge..."
+  if ! "$self_dir/termux-compat/install-noctalia-host-bridge.sh"; then
+    echo "warning: Noctalia host bridge was not installed." >&2
+    echo "  Run manually: $self_dir/termux-compat/install-noctalia-host-bridge.sh" >&2
   fi
 fi
 
