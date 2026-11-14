@@ -1,42 +1,70 @@
 #!/data/data/com.termux/files/usr/bin/bash
 #
-# Run a GPU client with the private Mesa 27 Zink/Turnip stack.
+# Run a GPU client with a Mesa Zink/Turnip stack.
 #
 # KGSL Gallium is the default for the MangoWM session because it is fast for
 # native clients, but some applications (notably Firefox/WebGL) need the
 # DMA-BUF-capable Zink path. This wrapper selects Zink/Turnip only for the
 # process it launches.
 #
+# The private Mesa 27 install under $prefix/opt/mesa-kgsl is preferred. If it
+# is incomplete, a system Mesa with Zink support in $prefix is used instead.
+#
 # Usage:
 #   mango-gpu-run <command> [arguments...]
 set -euo pipefail
 
 prefix="${PREFIX:-/data/data/com.termux/files/usr}"
-mesa="${MESA_KGSL_DIR:-$prefix/opt/mesa-kgsl}"
+private_mesa="${MESA_KGSL_DIR:-$prefix/opt/mesa-kgsl}"
 
-if [[ ! -f "$mesa/lib/dri/zink_dri.so" ||
-      ! -f "$mesa/lib/libgallium-27.0.0-devel.so" ]]; then
-	echo "error: private Mesa 27 Zink stack not found in $mesa" >&2
-	echo "  Run termux-compat/install-freedreno-kgsl.sh first." >&2
-	exit 1
+mesa=""
+if [[ -f "$private_mesa/lib/dri/zink_dri.so" ]] &&
+	compgen -G "$private_mesa/lib/libgallium*.so" >/dev/null; then
+	mesa="$private_mesa"
+elif [[ -f "$prefix/lib/dri/zink_dri.so" ]] &&
+	compgen -G "$prefix/lib/libgallium*.so" >/dev/null; then
+	mesa="$prefix"
 fi
 
-export LD_LIBRARY_PATH="$mesa/lib"
-export LIBGL_DRIVERS_PATH="$mesa/lib/dri"
-export GBM_BACKENDS_PATH="$mesa/lib/gbm"
-export MESA_LOADER_DRIVER_OVERRIDE=zink
-export GALLIUM_DRIVER=zink
-export FD_KGSL_DMABUF=1
-
-if [[ -f "$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
-	export VK_DRIVER_FILES="$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json"
-	export VK_ICD_FILENAMES="$VK_DRIVER_FILES"
+if [[ -z "$mesa" ]]; then
+	echo "warning: no usable Mesa Zink stack found" >&2
+	echo "  Looked in $private_mesa (private) and $prefix (system)." >&2
+	echo "  Falling back to the current environment." >&2
+	unset LD_LIBRARY_PATH LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH \
+		MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER FD_KGSL_DMABUF \
+		VK_DRIVER_FILES VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_FILENAMES
 else
-	unset VK_DRIVER_FILES VK_ICD_FILENAMES
-fi
+	export LD_LIBRARY_PATH="$mesa/lib"
+	export LIBGL_DRIVERS_PATH="$mesa/lib/dri"
+	export GBM_BACKENDS_PATH="$mesa/lib/gbm"
+	export MESA_LOADER_DRIVER_OVERRIDE=zink
+	export GALLIUM_DRIVER=zink
+	export FD_KGSL_DMABUF=1
 
-if [[ -f "$mesa/share/glvnd/egl_vendor.d/50_mesa.json" ]]; then
-	export __EGL_VENDOR_LIBRARY_FILENAMES="$mesa/share/glvnd/egl_vendor.d/50_mesa.json"
+	icd=""
+	if [[ -f "$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
+		icd="$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+	elif [[ -f "$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
+		icd="$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+	fi
+	if [[ -n "$icd" ]]; then
+		export VK_DRIVER_FILES="$icd"
+		export VK_ICD_FILENAMES="$icd"
+	else
+		unset VK_DRIVER_FILES VK_ICD_FILENAMES
+	fi
+
+	egl=""
+	if [[ -f "$mesa/share/glvnd/egl_vendor.d/50_mesa.json" ]]; then
+		egl="$mesa/share/glvnd/egl_vendor.d/50_mesa.json"
+	elif [[ -f "$prefix/share/glvnd/egl_vendor.d/50_mesa.json" ]]; then
+		egl="$prefix/share/glvnd/egl_vendor.d/50_mesa.json"
+	fi
+	if [[ -n "$egl" ]]; then
+		export __EGL_VENDOR_LIBRARY_FILENAMES="$egl"
+	else
+		unset __EGL_VENDOR_LIBRARY_FILENAMES
+	fi
 fi
 
 unset EGL_PLATFORM LIBGL_ALWAYS_SOFTWARE MESA_GL_VERSION_OVERRIDE

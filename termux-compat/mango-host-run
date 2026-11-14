@@ -31,6 +31,11 @@ export PREFIX HOME TMPDIR XDG_RUNTIME_DIR PATH SHELL
 : "${DISPLAY:=:0}"
 : "${XDG_CURRENT_DESKTOP:=mango}"
 : "${XDG_SESSION_TYPE:=wayland}"
+: "${MOZ_ENABLE_WAYLAND:=1}"
+: "${GDK_BACKEND:=wayland,x11}"
+: "${QT_QPA_PLATFORM:=wayland;xcb}"
+: "${SDL_VIDEODRIVER:=wayland}"
+: "${ELECTRON_OZONE_PLATFORM_HINT:=auto}"
 
 if [[ $WAYLAND_DISPLAY == /* ]]; then
 	wayland_socket=$WAYLAND_DISPLAY
@@ -52,6 +57,8 @@ if [[ ! -S $wayland_socket ]]; then
 	fi
 fi
 export WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+export MOZ_ENABLE_WAYLAND GDK_BACKEND QT_QPA_PLATFORM SDL_VIDEODRIVER
+export ELECTRON_OZONE_PLATFORM_HINT
 
 if (($# == 0)); then
 	echo "usage: mango-host-run <command> [arguments...]" >&2

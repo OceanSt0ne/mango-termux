@@ -29,6 +29,41 @@ fi
 script_dir="$(cd "$(dirname "$self_path")" && pwd)"
 
 prefix="${PREFIX:-/data/data/com.termux/files/usr}"
+
+# Universal session defaults. Keep caller overrides when they are non-empty,
+# but never inherit the PRoot /bin/bash as SHELL.
+export PREFIX="$prefix"
+export TMPDIR="$prefix/tmp"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$TMPDIR}"
+case "$XDG_RUNTIME_DIR" in
+  "$prefix"/*) ;;
+  *) XDG_RUNTIME_DIR="$TMPDIR" ;;
+esac
+
+if [[ -x "$prefix/bin/fish" ]]; then
+  native_shell="$prefix/bin/fish"
+elif [[ -x "$prefix/bin/bash" ]]; then
+  native_shell="$prefix/bin/bash"
+elif [[ -n "${SHELL:-}" && "$SHELL" != "/bin/bash" ]]; then
+  native_shell="$SHELL"
+elif [[ -x /system/bin/sh ]]; then
+  native_shell="/system/bin/sh"
+else
+  native_shell="$prefix/bin/sh"
+fi
+SHELL="$native_shell"
+export SHELL
+
+: "${MOZ_ENABLE_WAYLAND:=1}"
+: "${GDK_BACKEND:=wayland,x11}"
+: "${QT_QPA_PLATFORM:=wayland;xcb}"
+: "${SDL_VIDEODRIVER:=wayland}"
+: "${ELECTRON_OZONE_PLATFORM_HINT:=auto}"
+: "${XDG_CURRENT_DESKTOP:=mango}"
+: "${XDG_SESSION_TYPE:=wayland}"
+export MOZ_ENABLE_WAYLAND GDK_BACKEND QT_QPA_PLATFORM SDL_VIDEODRIVER
+export ELECTRON_OZONE_PLATFORM_HINT XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+
 priv_bin="$prefix/lib/mango-termux/mango"
 
 # Xwayland on the KGSL GPU: use the patched server when it is installed.
@@ -59,32 +94,61 @@ if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
   # termux/zink.c saves/restores these variables around mango's own renderer,
   # so mango still creates its Zink/Turnip context.
   mesa="$prefix/opt/mesa-kgsl"
-  icd="$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+  kgsl_root=""
   if [[ -f "$mesa/lib/dri/kgsl_dri.so" ]]; then
-    export LD_LIBRARY_PATH="$mesa/lib"
-    export LIBGL_DRIVERS_PATH="$mesa/lib/dri"
-    export GBM_BACKENDS_PATH="$mesa/lib/gbm"
+    kgsl_root="$mesa"
+  elif [[ -f "$prefix/lib/dri/kgsl_dri.so" ]]; then
+    kgsl_root="$prefix"
+  fi
+
+  if [[ -n "$kgsl_root" ]]; then
+    export LD_LIBRARY_PATH="$kgsl_root/lib"
+    export LIBGL_DRIVERS_PATH="$kgsl_root/lib/dri"
+    export GBM_BACKENDS_PATH="$kgsl_root/lib/gbm"
     export MESA_LOADER_DRIVER_OVERRIDE=kgsl
     export GALLIUM_DRIVER=kgsl
-    if [[ -f "$mesa/share/glvnd/egl_vendor.d/50_mesa.json" ]]; then
-      export __EGL_VENDOR_LIBRARY_FILENAMES="$mesa/share/glvnd/egl_vendor.d/50_mesa.json"
+
+    egl_vendor="$kgsl_root/share/glvnd/egl_vendor.d/50_mesa.json"
+    if [[ -f "$egl_vendor" ]]; then
+      export __EGL_VENDOR_LIBRARY_FILENAMES="$egl_vendor"
     else
       unset __EGL_VENDOR_LIBRARY_FILENAMES
     fi
-    if [[ -f "$icd" ]]; then
+
+    icd=""
+    if [[ -f "$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
+      icd="$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+    elif [[ -f "$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
+      icd="$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+    fi
+    if [[ -n "$icd" ]]; then
       export VK_DRIVER_FILES="$icd"
       export VK_ICD_FILENAMES="$icd"
     else
       unset VK_DRIVER_FILES VK_ICD_FILENAMES
     fi
   else
-    # Fallback: let host Mesa choose; do not leak a stale zink override.
-    echo "warning: Freedreno/KGSL Mesa 27 not installed in $mesa." >&2
-    echo "  Install it with termux-compat/install-freedreno-kgsl.sh;" >&2
-    echo "  otherwise session GL clients fall back to llvmpipe." >&2
+    # No KGSL DRI driver: clear stale Mesa/KGSL overrides. A Freedreno/Turnip
+    # Vulkan ICD is still usable with stock Mesa.
     unset LD_LIBRARY_PATH LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH
     unset MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER
-    unset VK_DRIVER_FILES VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_FILENAMES
+    unset __EGL_VENDOR_LIBRARY_FILENAMES
+
+    icd=""
+    if [[ -f "$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
+      icd="$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+    elif [[ -f "$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]]; then
+      icd="$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+    fi
+    if [[ -n "$icd" ]]; then
+      export VK_DRIVER_FILES="$icd"
+      export VK_ICD_FILENAMES="$icd"
+      echo "warning: turnip-kgsl is not installed; clients use stock Mesa." >&2
+      echo "  Install it with termux-compat/install-freedreno-kgsl.sh." >&2
+    else
+      unset VK_DRIVER_FILES VK_ICD_FILENAMES
+      echo "warning: no Freedreno/KGSL Mesa or Vulkan ICD found; using stock Mesa." >&2
+    fi
   fi
   # Mesa Zink on top of the Freedreno Vulkan driver (Turnip). The private
   # Mesa 27 build supplies both Zink and the native KGSL driver; termux/zink.c
@@ -132,8 +196,19 @@ persist_session_env() {
     printf 'export WAYLAND_DISPLAY=%q\n' "${WAYLAND_DISPLAY:-wayland-0}" &&
     printf 'export DISPLAY=%q\n' "${DISPLAY:-}" &&
     printf 'export XDG_RUNTIME_DIR=%q\n' "${XDG_RUNTIME_DIR:-}" &&
-    printf 'export XDG_CURRENT_DESKTOP=%q\n' "${XDG_CURRENT_DESKTOP:-mango}" &&
-    printf 'export XDG_SESSION_TYPE=%q\n' "${XDG_SESSION_TYPE:-wayland}" &&
+    for var in \
+      PREFIX \
+      TMPDIR \
+      SHELL \
+      XDG_CURRENT_DESKTOP \
+      XDG_SESSION_TYPE \
+      MOZ_ENABLE_WAYLAND \
+      GDK_BACKEND \
+      QT_QPA_PLATFORM \
+      SDL_VIDEODRIVER \
+      ELECTRON_OZONE_PLATFORM_HINT; do
+      printf 'export %s=%q\n' "$var" "${!var:-}"
+    done &&
     for var in \
       DBUS_SESSION_BUS_ADDRESS \
       XCURSOR_THEME \
@@ -216,6 +291,19 @@ find_running_mango() {
 backend="${MANGO_BACKEND:-x11}"
 export WLR_BACKENDS="${WLR_BACKENDS:-$backend}"
 
+# Refresh Termux integration helpers non-fatally before touching the session.
+integrate=""
+if [[ -x "$prefix/bin/mango-integrate" ]]; then
+  integrate="$prefix/bin/mango-integrate"
+elif [[ -x "$script_dir/termux-compat/mango-integrate" ]]; then
+  integrate="$script_dir/termux-compat/mango-integrate"
+fi
+if [[ -n "$integrate" ]]; then
+  if ! "$integrate" --quiet; then
+    echo "warning: $integrate failed; continuing with existing integration." >&2
+  fi
+fi
+
 # Reuse a compositor that survived the Termux app restart instead of starting
 # a second instance on the same X display.
 if ipc="$(find_running_mango)"; then
@@ -296,6 +384,15 @@ start_termux_x11() {
     -u VK_ICD_FILENAMES \
     -u EGL_PLATFORM \
     -u __EGL_VENDOR_LIBRARY_FILENAMES \
+    -u WAYLAND_DISPLAY \
+    -u XDG_CURRENT_DESKTOP \
+    -u XDG_SESSION_TYPE \
+    -u MOZ_ENABLE_WAYLAND \
+    -u GDK_BACKEND \
+    -u QT_QPA_PLATFORM \
+    -u SDL_VIDEODRIVER \
+    -u ELECTRON_OZONE_PLATFORM_HINT \
+    -u SHELL \
     termux-x11 "$display" -ac -noreset >>"$x11_log" 2>&1 &
   local i
   for i in $(seq 1 60); do
