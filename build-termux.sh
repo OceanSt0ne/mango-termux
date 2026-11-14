@@ -12,6 +12,7 @@
 #   PREFIX          Termux prefix (default: /data/data/com.termux/files/usr)
 #   SCENEFX_DIR     alternative scenefx source tree (default: <repository>/scenefx)
 #   MANGO_SKIP_KGSL 1 = do not install the private Freedreno/KGSL Mesa 27 stack
+#   MANGO_SKIP_INTEGRATIONS 1 = do not run mango-integrate after installation
 #   MANGO_SKIP_FIREFOX_FIX 1 = do not install the Firefox WebGL wrapper
 #   MANGO_SKIP_NOCTALIA_BRIDGE 1 = do not install the Noctalia host bridge
 set -euo pipefail
@@ -191,23 +192,19 @@ if [[ "${MANGO_SKIP_KGSL:-0}" != "1" && -e /dev/kgsl-3d0 ]]; then
   fi
 fi
 
-if [[ "${MANGO_SKIP_FIREFOX_FIX:-0}" != "1" &&
-      -x "$PREFIX/lib/firefox/firefox" ]]; then
+if [[ "${MANGO_SKIP_INTEGRATIONS:-0}" != "1" ]]; then
   echo
-  echo "Installing Firefox WebGL wrapper..."
-  if ! "$self_dir/termux-compat/install-firefox-webgl.sh"; then
-    echo "warning: Firefox WebGL wrapper was not installed." >&2
-    echo "  Run manually: $self_dir/termux-compat/install-firefox-webgl.sh" >&2
+  echo "Applying mango integrations..."
+  integrate_args=(--quiet)
+  if [[ "${MANGO_SKIP_FIREFOX_FIX:-0}" == "1" ]]; then
+    integrate_args+=(--no-firefox)
   fi
-fi
-
-if [[ "${MANGO_SKIP_NOCTALIA_BRIDGE:-0}" != "1" &&
-      -d "$PREFIX/var/lib/proot-distro/containers" ]]; then
-  echo
-  echo "Installing Noctalia host bridge..."
-  if ! "$self_dir/termux-compat/install-noctalia-host-bridge.sh"; then
-    echo "warning: Noctalia host bridge was not installed." >&2
-    echo "  Run manually: $self_dir/termux-compat/install-noctalia-host-bridge.sh" >&2
+  if [[ "${MANGO_SKIP_NOCTALIA_BRIDGE:-0}" == "1" ]]; then
+    integrate_args+=(--no-terminals)
+  fi
+  if ! "$PREFIX/bin/mango-integrate" "${integrate_args[@]}"; then
+    echo "warning: mango integrations were not applied." >&2
+    echo "  Run manually: $PREFIX/bin/mango-integrate ${integrate_args[*]}" >&2
   fi
 fi
 

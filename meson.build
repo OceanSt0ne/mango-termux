@@ -333,4 +333,16 @@ if get_option('termux')
     rename : 'mango-termux',
     install_mode : 'rwxr-xr-x',
   )
+
+  # Termux integration helpers. These are installed unconditionally; the
+  # optional components they touch (Firefox, Noctalia bridge, GPU stack) are
+  # detected and handled at runtime by mango-integrate.
+  install_data(
+    'termux-compat/mango-host-run',
+    'termux-compat/mango-firefox',
+    'termux-compat/mango-gpu-run',
+    'termux-compat/mango-integrate',
+    install_dir : get_option('bindir'),
+    install_mode : 'rwxr-xr-x',
+  )
 endif
