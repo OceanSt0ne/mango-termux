@@ -137,11 +137,12 @@ Termux:GUI больше не используется.
   - в режиме Turnip экспортирует приватные переменные Mesa 27
     (`LD_LIBRARY_PATH`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`,
     `MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) для дочерних
-    процессов сессии и очищает устаревшие переменные Vulkan ICD;
-    `termux/zink.c` ограничивает переменные Zink созданием рендерера самого
-    mango;
-  - если `$PREFIX/opt/mesa-kgsl/lib` отсутствует, снимает приватные переменные
-    Mesa/KGSL, а не оставляет устаревшее переопределение;
+    процессов сессии и использует приватный Freedreno ICD, если он установлен;
+    `termux/zink.c` ограничивает переменные Zink и Vulkan созданием рендерера
+    самого mango;
+  - если `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so` отсутствует, выводит
+    предупреждение и снимает приватные переменные Mesa/KGSL, а не оставляет
+    устаревшее переопределение;
   - режим AHB выбирает `$PREFIX/lib/mango-termux/mango` — бинарник,
     пропатченный на Android EGL/GLES;
   - режим pixman принудительно включает программный рендеринг;
@@ -217,18 +218,22 @@ Termux:GUI больше не используется.
 - `termux/zink.c`, `termux/zink.h`:
   - инициализируют EGL display и контекст ES2, требуют
     `EGL_EXT_image_dma_buf_import`;
-  - применяют
-    `VK_ICD_FILENAMES=$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`,
+  - применяют `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` к
+    `$PREFIX/opt/mesa-kgsl/share/vulkan/icd.d/freedreno_icd.aarch64.json`, если
+    он установлен, иначе к
+    `$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`, а также
     `MESA_LOADER_DRIVER_OVERRIDE=zink`, `GALLIUM_DRIVER=zink`,
     `EGL_PLATFORM=surfaceless` только на время создания рендерера mango;
-  - сохраняют и восстанавливают `VK_ICD_FILENAMES`,
+  - сохраняют и восстанавливают `VK_DRIVER_FILES`, `VK_ICD_FILENAMES`,
     `MESA_LOADER_DRIVER_OVERRIDE`, `GALLIUM_DRIVER`, `EGL_PLATFORM`, чтобы
     дочерние GL/Vulkan-клиенты использовали нативный стек сессии;
   - импортируют буферы на базе AHB как DMA-BUF EGLImage и создают FX-рендерер
     через `fx_renderer_create_with_egl()`;
   - задают оба провайдера — EGLImage и DMA-BUF — для scenefx.
 - Приватное дерево Mesa 27 в `$PREFIX/opt/mesa-kgsl` предоставляет Zink и
-  нативный Freedreno/KGSL. Launcher экспортирует нативные переменные KGSL
+  нативный Freedreno/KGSL; установите его через
+  `termux-compat/install-freedreno-kgsl.sh` (или позвольте `build-termux.sh`
+  сделать это автоматически). Launcher экспортирует нативные переменные KGSL
   дочерним процессам сессии, а Zink ограничивает самим mango, избегая сломанного
   рендеринга GTK4/Ghostty из-за глобального переопределения Zink.
 
@@ -386,7 +391,8 @@ grun --shell vkmark
 
 ### Вспомогательные скрипты и документация
 
-- `termux-compat/fix-mango-config.sh`,
+- `termux-compat/install-freedreno-kgsl.sh`,
+  `termux-compat/fix-mango-config.sh`,
   `termux-compat/install-benchmark-fixes.sh`,
   `termux-compat/build-arch-turnip.sh`.
 - `termux-compat/scenefx-termux.patch`.
@@ -404,10 +410,15 @@ grun --shell vkmark
 - Не требуются PRoot, systemd, udev, libinput, DRM-сессия или виртуальный
   терминал.
 - `$PREFIX` по умолчанию — `/data/data/com.termux/files/usr`.
-- Опционально для лучшего GPU-пути: приватная Mesa 27 в
-  `$PREFIX/opt/mesa-kgsl`, пропатченный Xwayland в
-  `$PREFIX/opt/xwayland-kgsl`. Если их нет, launcher откатывается на путь
-  Mesa/Xwayland хоста.
+- Для аппаратного ускорения клиентов сессии требуется Freedreno/KGSL Mesa 27 в
+  `$PREFIX/opt/mesa-kgsl`. `build-termux.sh` устанавливает её автоматически,
+  если существует `/dev/kgsl-3d0`; см.
+  [Freedreno/KGSL Mesa 27](#freedrenokgsl-mesa-27). В штатной Mesa Termux нет
+  KGSL-драйвера Gallium, поэтому без неё дочерние GL-клиенты откатываются на
+  llvmpipe.
+- Опционально: пропатченный Xwayland в `$PREFIX/opt/xwayland-kgsl` для
+  DRI3/GLX-ускорения вложенных X11-клиентов. Без него Xwayland использует
+  штатный путь.
 
 ### Пакеты Termux
 
@@ -416,7 +427,8 @@ pkg install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
   libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \
   libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \
-  littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp
+  littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp \
+  dpkg curl
 python -m pip install meson
 
 pkg install x11-repo
@@ -425,6 +437,44 @@ pkg install termux-x11-nightly
 ```
 
 - `scenefx 0.5` встроен в `scenefx/` и недоступен в пакетах Termux.
+
+### Freedreno/KGSL Mesa 27
+
+Штатная Mesa Termux предоставляет Zink/Turnip, но её Gallium-драйвер не
+поддерживает `/dev/kgsl-3d0`. Mango всё равно может запуститься через
+Zink/Turnip, но клиенты сессии при этом откатываются на llvmpipe. Один раз
+установите приватный KGSL-стек:
+
+```bash
+pkg install dpkg curl
+./termux-compat/install-freedreno-kgsl.sh
+```
+
+- Скачивает закреплённые пакеты lfdevs `mesa_27.0.0-92_aarch64.deb` и
+  `mesa-vulkan-icd-freedreno_27.0.0-92_aarch64.deb`, проверяет SHA-256 и
+  распаковывает их в `$PREFIX/opt/mesa-kgsl`.
+- Не заменяет штатную Mesa Termux в `$PREFIX/lib`; Termux:X11 и системные
+  пакеты остаются нетронутыми.
+- Переписывает манифест приватного Freedreno Vulkan на
+  `$PREFIX/opt/mesa-kgsl/lib/libvulkan_freedreno.so`.
+- При замене сохраняет существующее приватное дерево как
+  `mesa-kgsl.bak.<timestamp>`.
+- `build-termux.sh` запускает установщик автоматически, если существует
+  `/dev/kgsl-3d0`. Для пропуска задайте `MANGO_SKIP_KGSL=1`.
+- Источник закреплён на release `freedreno-27.0.0-devel-20261025-r2` репозитория
+  `lfdevs/termux-packages`.
+
+Проверка приватного стека:
+
+```bash
+test -f "$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so" && echo kgsl-gallium-ok
+test -f "$PREFIX/opt/mesa-kgsl/share/vulkan/icd.d/freedreno_icd.aarch64.json" && echo kgsl-vulkan-ok
+grep -a -m1 -o '/dev/kgsl-3d0' \
+  "$PREFIX/opt/mesa-kgsl/lib/libgallium-27.0.0-devel.so"
+```
+
+Без него `mango-termux` выводит предупреждение, а GL-клиенты сессии могут
+показывать llvmpipe.
 
 ### Опциональный пропатченный wlroots 0.20
 
@@ -471,6 +521,9 @@ cd ~/Projects/mango-termux
   `mango-x11-check` и `mango-termux`.
 - Создаёт приватные GPU-копии в `$PREFIX/lib/mango-termux`, патчит ссылки
   Android EGL/GLES и готовит `~/.config/mango` для новой установки.
+- Также устанавливает приватный Freedreno/KGSL Mesa 27 в
+  `$PREFIX/opt/mesa-kgsl`, если существует `/dev/kgsl-3d0`; для пропуска
+  используйте `MANGO_SKIP_KGSL=1`.
 - Установленный `$PREFIX/bin/mango` — обычная сборка с линковкой Mesa/Turnip;
   `$PREFIX/lib/mango-termux/mango` — приватная сборка Android
   EGL/AHardwareBuffer.
@@ -499,8 +552,9 @@ meson compile -C build && meson install -C build
 chmod 000 /data/data/com.termux/files/lib
 ```
 
-- Ручная сборка не создаёт `$PREFIX/lib/mango-termux/mango`; используйте
-  `./build-termux.sh` для пути AHB/приватного GPU.
+- Ручная сборка не создаёт `$PREFIX/lib/mango-termux/mango` и не устанавливает
+  KGSL-стек; используйте `./build-termux.sh` для пути AHB/приватного GPU или
+  запустите `./termux-compat/install-freedreno-kgsl.sh` отдельно.
 
 ### Проверка установки
 
@@ -509,6 +563,7 @@ mango -v
 mango -p -c ~/.config/mango/config.conf
 test -x "$PREFIX/bin/mango-termux" && echo launcher-ok
 test -x "$PREFIX/lib/mango-termux/mango" && echo private-gpu-ok
+test -f "$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so" && echo freedreno-kgsl-ok
 ```
 
 ## 4. Запуск и конфигурация
@@ -521,6 +576,9 @@ test -x "$PREFIX/lib/mango-termux/mango" && echo private-gpu-ok
 mango-termux
 ```
 
+- Перед первым запуском выполните `./build-termux.sh` или
+  `./termux-compat/install-freedreno-kgsl.sh`, чтобы клиенты сессии использовали
+  GPU Adreno.
 - Новые конфигурации получают эффекты автоматически. Существующие конфигурации
   не перезаписываются; при необходимости включите эффекты вручную.
 - Запускайте `mango-termux`, а не чистый бинарник `mango`, когда требуется
@@ -557,6 +615,8 @@ mango-termux
 | `XDG_RUNTIME_DIR` | Каталог runtime Wayland/IPC; по умолчанию `$TMPDIR`. |
 | `PREFIX` | Префикс Termux; по умолчанию `/data/data/com.termux/files/usr`. |
 | `SCENEFX_DIR` | Внешнее дерево исходников scenefx для сборки. |
+| `MANGO_SKIP_KGSL` | `1` пропускает автоматическую установку Freedreno/KGSL Mesa 27 в `build-termux.sh`. |
+| `MESA_KGSL_DIR` | Переопределяет каталог приватной установки KGSL для установщика. |
 | `PROOT_DISTRO_NAME` | Контейнер Arch proot для опциональных скриптов Turnip/бенчмарков. |
 | `JOBS`, `MESA_BUILD_DIR` | Параллелизм сборки Arch Turnip и рабочий каталог. |
 | `NOCTALIA_GPU` | Опциональный GPU-режим Arch Noctalia; по умолчанию `kgsl`, `0` = llvmpipe, `zink` — устаревший. |
@@ -737,7 +797,10 @@ grun --shell vkmark
 - `FD735` означает нативный Freedreno/KGSL для сессии или X11-клиентов.
 - `zink Vulkan ... Turnip ...` означает Zink/Turnip; ожидаемо для собственного
   рендерера mango или явной диагностики.
-- `llvmpipe` означает программный резервный путь.
+- `llvmpipe` означает программный резервный путь. Если рендерер самого mango —
+  Zink/Turnip, а клиенты сессии показывают llvmpipe, установите приватный
+  KGSL-стек через `./termux-compat/install-freedreno-kgsl.sh` и перезапустите
+  сессию.
 - Проверка ускорения X11-клиента изнутри mango:
 
 ```sh
@@ -820,9 +883,9 @@ DISPLAY=:0 mango-x11-check; echo $?
 - `couldn't create renderer`: убедитесь, что scenefx собран с
   `scenefx-termux.patch`, установлен в `$PREFIX`, а launcher использует
   ожидаемый бинарник.
-- Нет GPU-эффектов: проверьте, что конфигурация включает эффекты, что для пути
-  Turnip существует `$PREFIX/opt/mesa-kgsl` и установлен
-  `mesa-vulkan-icd-freedreno`.
+- Нет GPU-эффектов: проверьте, что конфигурация включает эффекты, что существует
+  `$PREFIX/opt/mesa-kgsl` (запустите `./termux-compat/install-freedreno-kgsl.sh`)
+  и установлен `mesa-vulkan-icd-freedreno`.
 - `vkmark` завершается с ошибками assimp/Vulkan: запустите
   `termux-compat/install-benchmark-fixes.sh`; для Arch Turnip KGSL запустите
   `termux-compat/build-arch-turnip.sh`.
@@ -839,4 +902,6 @@ cd ~/Projects/mango-termux
 
 - Скрипт перенастраивает существующие каталоги сборки scenefx и mango как
   release `-O3` и обновляет установленные бинарники и приватные GPU-копии.
+- Он также переиспользует или устанавливает приватный Freedreno/KGSL-стек, если
+  не задан `MANGO_SKIP_KGSL=1`.
 - После пересборки перезапустите сессию: `mango-termux --restart`.

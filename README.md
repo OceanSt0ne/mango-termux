@@ -87,8 +87,8 @@ Optional Noctalia/Arch proot integration is separate and not required.
 - `run-mango.sh` / installed `$PREFIX/bin/mango-termux`:
   - resolves its own path and `PREFIX`; uses `$PREFIX/opt/xwayland-kgsl/bin/Xwayland` when present unless `WLR_XWAYLAND` is set;
   - renderer precedence: `MANGO_TERMUX_RENDERER` first, then compatibility `MANGO_TERMUX_GPU` (`0` → pixman, `1`/`ahb` → ahb, `turnip`/`zink` → turnip), otherwise turnip;
-  - Turnip mode exports private Mesa 27 variables (`LD_LIBRARY_PATH`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`, `MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) for session children and clears stale Vulkan ICD variables; `termux/zink.c` scopes Zink variables to mango's own renderer creation;
-  - if `$PREFIX/opt/mesa-kgsl/lib` is absent, unsets the private Mesa/KGSL variables rather than leaking a stale override;
+  - Turnip mode exports private Mesa 27 variables (`LD_LIBRARY_PATH`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`, `MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) for session children and uses the private Freedreno ICD when present; `termux/zink.c` scopes Zink and Vulkan variables to mango's own renderer creation;
+  - if `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so` is absent, warns and unsets the private Mesa/KGSL variables rather than leaking a stale override;
   - AHB mode selects `$PREFIX/lib/mango-termux/mango`, the binary patched to Android EGL/GLES;
   - pixman mode forces software rendering;
   - sets `XDG_RUNTIME_DIR` to `$TMPDIR` if unset and mode 700;
@@ -135,11 +135,11 @@ Optional Noctalia/Arch proot integration is separate and not required.
 
 - `termux/zink.c`, `termux/zink.h`:
   - initializes an EGL display and ES2 context, requires `EGL_EXT_image_dma_buf_import`;
-  - applies `VK_ICD_FILENAMES=$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`, `MESA_LOADER_DRIVER_OVERRIDE=zink`, `GALLIUM_DRIVER=zink`, `EGL_PLATFORM=surfaceless` only while creating mango's renderer;
-  - saves and restores `VK_ICD_FILENAMES`, `MESA_LOADER_DRIVER_OVERRIDE`, `GALLIUM_DRIVER`, `EGL_PLATFORM` so child GL/Vulkan clients use the native session stack;
+  - applies `VK_DRIVER_FILES`/`VK_ICD_FILENAMES` to `$PREFIX/opt/mesa-kgsl/share/vulkan/icd.d/freedreno_icd.aarch64.json` when installed, otherwise to `$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`, plus `MESA_LOADER_DRIVER_OVERRIDE=zink`, `GALLIUM_DRIVER=zink`, `EGL_PLATFORM=surfaceless` only while creating mango's renderer;
+  - saves and restores `VK_DRIVER_FILES`, `VK_ICD_FILENAMES`, `MESA_LOADER_DRIVER_OVERRIDE`, `GALLIUM_DRIVER`, `EGL_PLATFORM` so child GL/Vulkan clients use the native session stack;
   - imports AHB-backed buffers as DMA-BUF EGLImages and creates the FX renderer with `fx_renderer_create_with_egl()`;
   - sets both EGLImage and DMA-BUF providers for scenefx.
-- The private Mesa 27 tree at `$PREFIX/opt/mesa-kgsl` supplies Zink and native Freedreno/KGSL. The launcher exports native KGSL variables to session children while Zink is scoped to mango itself, avoiding broken GTK4/Ghostty rendering from a global Zink override.
+- The private Mesa 27 tree at `$PREFIX/opt/mesa-kgsl` supplies Zink and native Freedreno/KGSL; install it with `termux-compat/install-freedreno-kgsl.sh` (or let `build-termux.sh` do it automatically). The launcher exports native KGSL variables to session children while Zink is scoped to mango itself, avoiding broken GTK4/Ghostty rendering from a global Zink override.
 
 ### Session GPU and Xwayland on KGSL
 
@@ -255,7 +255,7 @@ grun --shell vkmark
 
 ### Helper scripts and documentation
 
-- `termux-compat/fix-mango-config.sh`, `termux-compat/install-benchmark-fixes.sh`, `termux-compat/build-arch-turnip.sh`.
+- `termux-compat/install-freedreno-kgsl.sh`, `termux-compat/fix-mango-config.sh`, `termux-compat/install-benchmark-fixes.sh`, `termux-compat/build-arch-turnip.sh`.
 - `termux-compat/scenefx-termux.patch`.
 - `termux/x11-check.c`.
 - `TERMUX_NOCTALIA.md` and `TERMUX_NOCTALIA_ru.md`: optional Arch proot integration guide, native KGSL setup, Noctalia launch script, and environment isolation. Not part of the required host port.
@@ -267,7 +267,8 @@ grun --shell vkmark
 - Android arm64, Termux, the Termux:X11 app (`com.termux.x11`); `termux-x11-nightly` package.
 - No PRoot, systemd, udev, libinput, DRM session, or virtual terminal required.
 - `$PREFIX` is `/data/data/com.termux/files/usr` by default.
-- Optional for the best GPU path: private Mesa 27 at `$PREFIX/opt/mesa-kgsl`, patched Xwayland at `$PREFIX/opt/xwayland-kgsl`. If absent, the launcher falls back to the host Mesa/Xwayland path.
+- Required for hardware-accelerated session clients: Freedreno/KGSL Mesa 27 in `$PREFIX/opt/mesa-kgsl`. `build-termux.sh` installs it automatically when `/dev/kgsl-3d0` exists; see [Freedreno/KGSL Mesa 27](#freedrenokgsl-mesa-27). Stock Termux Mesa has no KGSL Gallium driver, so without it child GL clients fall back to llvmpipe.
+- Optional: patched Xwayland at `$PREFIX/opt/xwayland-kgsl` for DRI3/GLX acceleration of nested X11 clients. Without it, Xwayland clients use the stock path.
 
 ### Termux packages
 
@@ -276,7 +277,8 @@ pkg install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
   libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \
   libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \
-  littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp
+  littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp \
+  dpkg curl
 python -m pip install meson
 
 pkg install x11-repo
@@ -285,6 +287,33 @@ pkg install termux-x11-nightly
 ```
 
 - `scenefx 0.5` is bundled in `scenefx/` and is not available from Termux packages.
+
+### Freedreno/KGSL Mesa 27
+
+Stock Termux Mesa provides Zink/Turnip, but its Gallium driver does not support `/dev/kgsl-3d0`. Mango can still start through Zink/Turnip, but session clients then fall back to llvmpipe. Install the private KGSL stack once:
+
+```bash
+pkg install dpkg curl
+./termux-compat/install-freedreno-kgsl.sh
+```
+
+- Downloads the pinned lfdevs `mesa_27.0.0-92_aarch64.deb` and `mesa-vulkan-icd-freedreno_27.0.0-92_aarch64.deb` packages, verifies SHA-256, and extracts them under `$PREFIX/opt/mesa-kgsl`.
+- Does not replace stock Termux Mesa in `$PREFIX/lib`; Termux:X11 and system packages stay intact.
+- Rewrites the private Freedreno Vulkan manifest to `$PREFIX/opt/mesa-kgsl/lib/libvulkan_freedreno.so`.
+- Backs up an existing private tree as `mesa-kgsl.bak.<timestamp>` when replacing it.
+- `build-termux.sh` runs this automatically when `/dev/kgsl-3d0` exists. Set `MANGO_SKIP_KGSL=1` to skip it.
+- Upstream is pinned to `lfdevs/termux-packages` release `freedreno-27.0.0-devel-20261025-r2`.
+
+Verify the private stack:
+
+```bash
+test -f "$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so" && echo kgsl-gallium-ok
+test -f "$PREFIX/opt/mesa-kgsl/share/vulkan/icd.d/freedreno_icd.aarch64.json" && echo kgsl-vulkan-ok
+grep -a -m1 -o '/dev/kgsl-3d0' \
+  "$PREFIX/opt/mesa-kgsl/lib/libgallium-27.0.0-devel.so"
+```
+
+Without it, `mango-termux` prints a warning and session GL clients may report llvmpipe.
 
 ### Optional patched wlroots 0.20
 
@@ -323,6 +352,7 @@ cd ~/Projects/mango-termux
 - `SCENEFX_DIR=/path/to/scenefx ./build-termux.sh` uses an external scenefx tree; an unpatched git checkout gets the patch automatically.
 - The script uses release `-O3`, installs `mango`, `mmsg`, `mangonag`, `mango-x11-check`, and `mango-termux`.
 - It creates private GPU copies in `$PREFIX/lib/mango-termux`, patches Android EGL/GLES references, and prepares `~/.config/mango` for a new install.
+- It also installs the private Freedreno/KGSL Mesa 27 stack in `$PREFIX/opt/mesa-kgsl` when `/dev/kgsl-3d0` exists; use `MANGO_SKIP_KGSL=1` to skip that step.
 - The installed `$PREFIX/bin/mango` is the normal Mesa/Turnip-linked build; `$PREFIX/lib/mango-termux/mango` is the private Android EGL/AHardwareBuffer build.
 
 ### Manual build
@@ -348,7 +378,7 @@ meson compile -C build && meson install -C build
 chmod 000 /data/data/com.termux/files/lib
 ```
 
-- Manual build does not create `$PREFIX/lib/mango-termux/mango`; use `./build-termux.sh` for the AHB/private GPU path.
+- Manual build does not create `$PREFIX/lib/mango-termux/mango` or install the KGSL stack; use `./build-termux.sh` for the AHB/private GPU path, or run `./termux-compat/install-freedreno-kgsl.sh` separately.
 
 ### Verify installation
 
@@ -357,6 +387,7 @@ mango -v
 mango -p -c ~/.config/mango/config.conf
 test -x "$PREFIX/bin/mango-termux" && echo launcher-ok
 test -x "$PREFIX/lib/mango-termux/mango" && echo private-gpu-ok
+test -f "$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so" && echo freedreno-kgsl-ok
 ```
 
 ## 4. Usage & Configuration
@@ -369,6 +400,7 @@ test -x "$PREFIX/lib/mango-termux/mango" && echo private-gpu-ok
 mango-termux
 ```
 
+- Run `./build-termux.sh` or `./termux-compat/install-freedreno-kgsl.sh` before the first launch so session clients use the Adreno GPU.
 - New configs get effects enabled automatically. Existing configs are not overwritten; enable effects manually if needed.
 - Launch `mango-termux`, not the bare `mango` binary, when the renderer environment is needed.
 
@@ -399,6 +431,8 @@ mango-termux
 | `XDG_RUNTIME_DIR` | Wayland/IPC runtime directory; defaults to `$TMPDIR`. |
 | `PREFIX` | Termux prefix; default `/data/data/com.termux/files/usr`. |
 | `SCENEFX_DIR` | External scenefx source tree for the build. |
+| `MANGO_SKIP_KGSL` | `1` skips the automatic Freedreno/KGSL Mesa 27 install in `build-termux.sh`. |
+| `MESA_KGSL_DIR` | Override the private KGSL install directory for the installer. |
 | `PROOT_DISTRO_NAME` | Arch proot container for optional Turnip/benchmark scripts. |
 | `JOBS`, `MESA_BUILD_DIR` | Arch Turnip build parallelism and work directory. |
 | `NOCTALIA_GPU` | Optional Arch Noctalia GPU mode; `kgsl` default, `0` = llvmpipe, `zink` legacy. |
@@ -558,7 +592,7 @@ grun --shell vkmark
 
 - `FD735` means native Freedreno/KGSL for the session or X11 clients.
 - `zink Vulkan ... Turnip ...` means Zink/Turnip; expected for mango's own renderer or explicit diagnostics.
-- `llvmpipe` means software fallback.
+- `llvmpipe` means software fallback. If mango's own renderer is Zink/Turnip but session clients report llvmpipe, install the private KGSL stack with `./termux-compat/install-freedreno-kgsl.sh` and restart the session.
 - Check X11 client acceleration from inside mango:
 
 ```sh
@@ -614,7 +648,7 @@ DISPLAY=:0 mango-x11-check; echo $?
 - Black/empty screen: make sure the Termux:X11 app is open; launch `mango-termux -d` and inspect the log.
 - Slow rendering: lower the Termux:X11 resolution, disable animations/effects in `config.conf`, or try `MANGO_TERMUX_RENDERER=ahb` / `pixman` for comparison.
 - `couldn't create renderer`: verify scenefx was built with `scenefx-termux.patch`, installed under `$PREFIX`, and that the launcher uses the expected binary.
-- No GPU effects: check that the config enables effects, that `$PREFIX/opt/mesa-kgsl` exists for the Turnip path, and that `mesa-vulkan-icd-freedreno` is installed.
+- No GPU effects: check that the config enables effects, that `$PREFIX/opt/mesa-kgsl` exists (run `./termux-compat/install-freedreno-kgsl.sh`), and that `mesa-vulkan-icd-freedreno` is installed.
 - `vkmark` fails with assimp/Vulkan errors: run `termux-compat/install-benchmark-fixes.sh`; for Arch Turnip KGSL, run `termux-compat/build-arch-turnip.sh`.
 - `glibc-runner` picks up bionic Mesa: rerun the benchmark installer to patch `glibc-runner.sh`, or remove the bionic variables from the environment.
 
@@ -626,4 +660,5 @@ cd ~/Projects/mango-termux
 ```
 
 - The script reconfigures existing scenefx and mango build directories as release `-O3` and refreshes installed binaries and private GPU copies.
+- It also reuses or installs the private Freedreno/KGSL stack unless `MANGO_SKIP_KGSL=1` is set.
 - Restart the session after rebuilding: `mango-termux --restart`.
