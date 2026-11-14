@@ -156,6 +156,10 @@ need mktemp
 
 install_wrappers
 
+if [[ -x "$self_dir/mango-integrate" ]]; then
+	"$self_dir/mango-integrate" --no-terminals --quiet || true
+fi
+
 if is_firefox_installed; then
 	while IFS= read -r file; do
 		[[ -n "$file" ]] || continue
