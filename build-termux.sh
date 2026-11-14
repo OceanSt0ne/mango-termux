@@ -86,15 +86,23 @@ if ! grep -q "fx_renderer_create_with_egl" \
 fi
 
 echo "Building scenefx..."
+scenefx_meson_args=(--prefix="$PREFIX" -Dexamples=false -Dwerror=false
+  --buildtype=release -Doptimization=3)
 if [[ ! -f "$scenefx_dir/build/build.ninja" ]]; then
   meson setup "$scenefx_dir/build" "$scenefx_dir" \
-    --prefix="$PREFIX" -Dexamples=false -Dwerror=false
+    "${scenefx_meson_args[@]}"
+else
+  # Reconfigure existing builds too: older versions of this script left
+  # scenefx configured with buildtype=debug and optimization=0.
+  meson setup --reconfigure "$scenefx_dir/build" "$scenefx_dir" \
+    "${scenefx_meson_args[@]}"
 fi
 meson compile -C "$scenefx_dir/build"
 meson install -C "$scenefx_dir/build"
 
 echo "Building mango..."
-mango_meson_args=(--prefix="$PREFIX" -Dtermux=true -Dxwayland=enabled)
+mango_meson_args=(--prefix="$PREFIX" -Dtermux=true -Dxwayland=enabled
+  --buildtype=release -Doptimization=3)
 if [[ ! -f "$self_dir/build/build.ninja" ]]; then
   meson setup "$self_dir/build" "$self_dir" "${mango_meson_args[@]}"
 else

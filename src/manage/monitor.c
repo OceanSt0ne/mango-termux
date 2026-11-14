@@ -1388,6 +1388,7 @@ void handle_output_frame(struct wl_listener *listener, void *data) {
 	struct timespec now;
 	bool need_more_frames = false;
 	bool resizing_on_this_mon = false;
+	bool committed = false;
 
 	if (server.session && !server.session->active) {
 		return;
@@ -1432,9 +1433,25 @@ void handle_output_frame(struct wl_listener *listener, void *data) {
 		monitor_stop_skip_frame_timer(m);
 	}
 
-	mango_scene_output_commit(m->scene_output, &m->pending);
+	committed = mango_scene_output_commit(m->scene_output, &m->pending);
+	if (!committed) {
+		/*
+		 * The output commit failed or was skipped. On X11 this usually means
+		 * the swapchain is full because Present is still pending. Do not send
+		 * frame-done or re-arm the frame loop here: clients would believe the
+		 * frame was presented and keep rendering at event-loop speed while the
+		 * display is limited by Present. The next backend Present/Idle event
+		 * will drive the retry once the swapchain has room.
+		 */
+		return;
+	}
 
 skip:
+	// The resize skip path does not commit a frame, so there is nothing to
+	// present or acknowledge with frame-done.
+	if (!committed)
+		return;
+
 	// Sends frame-done notifications.
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
