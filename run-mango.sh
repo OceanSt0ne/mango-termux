@@ -66,6 +66,11 @@ if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
     export GBM_BACKENDS_PATH="$mesa/lib/gbm"
     export MESA_LOADER_DRIVER_OVERRIDE=kgsl
     export GALLIUM_DRIVER=kgsl
+    if [[ -f "$mesa/share/glvnd/egl_vendor.d/50_mesa.json" ]]; then
+      export __EGL_VENDOR_LIBRARY_FILENAMES="$mesa/share/glvnd/egl_vendor.d/50_mesa.json"
+    else
+      unset __EGL_VENDOR_LIBRARY_FILENAMES
+    fi
     if [[ -f "$icd" ]]; then
       export VK_DRIVER_FILES="$icd"
       export VK_ICD_FILENAMES="$icd"
@@ -79,7 +84,7 @@ if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
     echo "  otherwise session GL clients fall back to llvmpipe." >&2
     unset LD_LIBRARY_PATH LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH
     unset MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER
-    unset VK_DRIVER_FILES VK_ICD_FILENAMES
+    unset VK_DRIVER_FILES VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_FILENAMES
   fi
   # Mesa Zink on top of the Freedreno Vulkan driver (Turnip). The private
   # Mesa 27 build supplies both Zink and the native KGSL driver; termux/zink.c
