@@ -156,6 +156,10 @@ mkdir -p "$bin"
 install -m 755 "$wrapper_src" "$bin/mango-host-run"
 echo "installed wrapper: $bin/mango-host-run"
 
+if [[ -x "$self_dir/mango-integrate" ]]; then
+	"$self_dir/mango-integrate" --no-firefox --quiet || true
+fi
+
 while IFS= read -r file; do
 	[[ -n "$file" ]] || continue
 	patch_desktop "$file"

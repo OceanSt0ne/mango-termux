@@ -1,0 +1,512 @@
+#!/data/data/com.termux/files/usr/bin/bash
+#
+# Idempotently re-apply the MangoWM Termux integrations.
+#
+# The integrations are normally installed by the dedicated helpers under
+# termux-compat/. This script re-applies the parts that can change when a new
+# Termux package or .deb is installed later: Firefox and terminal .desktop
+# entries, the Firefox launcher, and safe default terminal shell configs.
+#
+# Usage:
+#   ./termux-compat/mango-integrate [--quiet] [--check]
+#                                    [--no-firefox] [--no-terminals]
+set -euo pipefail
+
+prefix="${PREFIX:-/data/data/com.termux/files/usr}"
+bin="$prefix/bin"
+home="${HOME:-/data/data/com.termux/files/home}"
+config="${XDG_CONFIG_HOME:-$home/.config}"
+
+quiet=0
+check_only=0
+enable_firefox=1
+enable_terminals=1
+
+firefox_patched=0
+firefox_skipped=0
+terminal_patched=0
+terminal_skipped=0
+configs_created=0
+configs_skipped=0
+
+usage() {
+	cat <<'EOF'
+Re-apply the MangoWM Termux integrations.
+
+Usage:
+  ./termux-compat/mango-integrate [options]
+
+Options:
+  --quiet         Suppress normal output; warnings/errors still go to stderr.
+  --check         Verify wrappers and patched desktop entries; exit nonzero
+                  if anything is missing. No files are modified.
+  --no-firefox    Do not patch Firefox desktop entries or the launcher.
+  --no-terminals  Do not patch terminal desktop entries or write shell configs.
+  -h, --help      Show this help.
+EOF
+}
+
+die() {
+	printf 'error: %s\n' "$*" >&2
+	exit 1
+}
+
+warn() {
+	printf 'warning: %s\n' "$*" >&2
+}
+
+info() {
+	if ((!quiet)); then
+		printf '%s\n' "$*"
+	fi
+}
+
+while (($#)); do
+	case "$1" in
+		--quiet) quiet=1 ;;
+		--check) check_only=1 ;;
+		--no-firefox) enable_firefox=0 ;;
+		--no-terminals) enable_terminals=0 ;;
+		-h|--help) usage; exit 0 ;;
+		--) shift; break ;;
+		*) die "unknown argument: $1" ;;
+	esac
+	shift
+done
+
+if (($#)); then
+	die "unexpected argument: $1"
+fi
+
+set_mode_from() {
+	local reference="$1"
+	local target="$2"
+	if chmod --reference="$reference" "$target" 2>/dev/null; then
+		return 0
+	fi
+	local mode
+	mode="$(stat -c '%a' "$reference" 2>/dev/null)" || return 0
+	chmod "$mode" "$target" 2>/dev/null || true
+}
+
+discover_desktop_entries() {
+	local dir="$prefix/share/applications"
+	if [[ -d "$dir" ]]; then
+		find "$dir" -maxdepth 1 -type f -name '*.desktop' -print0 \
+			2>/dev/null || true
+	fi
+
+	local containers="$prefix/var/lib/proot-distro/containers"
+	if [[ -d "$containers" ]]; then
+		find "$containers" -type f \
+			\( -path '*/rootfs/applications/*.desktop' \
+			-o -path '*/rootfs/*/applications/*.desktop' \) \
+			-print0 2>/dev/null || true
+	fi
+}
+
+is_firefox_entry() {
+	grep -qi 'firefox' "$1"
+}
+
+firefox_exec_match() {
+	grep -Eq '^Exec=[[:space:]]*([^[:space:]]*/)?(firefox|mango-firefox)([[:space:]]|$)' "$1"
+}
+
+direct_wrapper_match() {
+	grep -Eq "^Exec=[[:space:]]*[^[:space:]]*mango-(firefox|host-run)([[:space:]]|\$)" "$1"
+}
+
+terminal_exec_match() {
+	local file="$1"
+	local term
+	grep -Eq '^Exec=[[:space:]]*/usr/bin/env .*mango-host-run' "$file" &&
+		return 0
+	for term in kitty kitty-open foot footclient foot-server ghostty; do
+		if grep -Eq "^Exec=[[:space:]]*([^[:space:]]*/)?${term}([[:space:]]|\$)" \
+			"$file"; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+terminal_filename_match() {
+	local base="${1##*/}"
+	base="${base,,}"
+	case "$base" in
+		kitty*.desktop|foot*.desktop|*ghostty*.desktop) return 0 ;;
+	esac
+	return 1
+}
+
+is_terminal_entry() {
+	local file="$1"
+	grep -q 'mango-host-run' "$file" && return 0
+	terminal_exec_match "$file" && return 0
+	terminal_filename_match "$file"
+}
+
+backup_once() {
+	local file="$1"
+	local backup="$file.mango-bak"
+	if [[ -e "$backup" || -L "$backup" ]]; then
+		return 0
+	fi
+	if ! cp -a "$file" "$backup" 2>/dev/null; then
+		warn "cannot create backup: $backup"
+		return 1
+	fi
+	return 0
+}
+
+patch_firefox_desktop() {
+	local file="$1"
+
+	local tmp
+	tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $file"
+		return 0
+	}
+	if ! awk -v prefix="$prefix" '
+		function basename_of(path,    n, parts) {
+			n = split(path, parts, "/")
+			return parts[n]
+		}
+		{
+			if (index($0, "Exec=") == 1) {
+				value = substr($0, 6)
+				match(value, /^[[:space:]]*/)
+				rest = substr(value, RLENGTH + 1)
+				if (rest != "") {
+					split(rest, fields, /[[:space:]]+/)
+					token = fields[1]
+					base = basename_of(token)
+					if (base == "firefox" || base == "mango-firefox") {
+						tail = substr(rest, length(token) + 1)
+						print "Exec=/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH " prefix "/bin/mango-firefox" tail
+						next
+					}
+				}
+			}
+			print
+		}
+	' "$file" >"$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot rewrite: $file"
+		return 0
+	fi
+
+	if cmp -s "$file" "$tmp"; then
+		rm -f "$tmp"
+		info "no firefox Exec: $file"
+		firefox_skipped=$((firefox_skipped + 1))
+		return 0
+	fi
+
+	if ! backup_once "$file"; then
+		rm -f "$tmp"
+		return 0
+	fi
+
+	set_mode_from "$file" "$tmp"
+	if ! mv "$tmp" "$file" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace: $file"
+		return 0
+	fi
+
+	info "patched firefox: $file"
+	firefox_patched=$((firefox_patched + 1))
+	return 0
+}
+
+patch_terminal_desktop() {
+	local file="$1"
+
+	local fallback=0
+	if ! terminal_exec_match "$file"; then
+		fallback=1
+	fi
+
+	local tmp
+	tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $file"
+		return 0
+	}
+	if ! awk -v prefix="$prefix" -v fallback="$fallback" '
+		function basename_of(path,    n, parts) {
+			n = split(path, parts, "/")
+			return parts[n]
+		}
+		{
+			if (index($0, "Exec=") == 1) {
+				value = substr($0, 6)
+				match(value, /^[[:space:]]*/)
+				rest = substr(value, RLENGTH + 1)
+				if (rest != "") {
+					split(rest, fields, /[[:space:]]+/)
+					token = fields[1]
+					base = basename_of(token)
+					ok = (base == "kitty" || base == "kitty-open" ||
+						base == "foot" || base == "footclient" ||
+						base == "foot-server" || base == "ghostty")
+					direct = (base == "mango-host-run")
+					if (ok || direct || fallback == 1) {
+						tail = substr(rest, length(token) + 1)
+						target = token
+						if (direct) {
+							target = prefix "/bin/mango-host-run"
+							tail = substr(rest, length(token) + 1)
+							print "Exec=/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH " target tail
+						} else {
+							print "Exec=/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH " prefix "/bin/mango-host-run " token tail
+						}
+						next
+					}
+				}
+			}
+			print
+		}
+	' "$file" >"$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot rewrite: $file"
+		return 0
+	fi
+
+	if cmp -s "$file" "$tmp"; then
+		rm -f "$tmp"
+		info "no terminal Exec: $file"
+		terminal_skipped=$((terminal_skipped + 1))
+		return 0
+	fi
+
+	if ! backup_once "$file"; then
+		rm -f "$tmp"
+		return 0
+	fi
+
+	set_mode_from "$file" "$tmp"
+	if ! mv "$tmp" "$file" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace: $file"
+		return 0
+	fi
+
+	info "patched terminal: $file"
+	terminal_patched=$((terminal_patched + 1))
+	return 0
+}
+
+ensure_firefox_launcher() {
+	local src="$bin/mango-firefox"
+	local dst="$bin/firefox"
+
+	[[ -x "$prefix/lib/firefox/firefox" ]] || return 0
+
+	if [[ ! -x "$src" ]]; then
+		warn "cannot install Firefox launcher: missing or not executable: $src"
+		return 0
+	fi
+
+	if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+		info "Firefox launcher already integrated: $dst"
+		return 0
+	fi
+
+	if [[ -e "$dst" || -L "$dst" ]]; then
+		local backup="$dst.mango-bak"
+		if [[ ! -e "$backup" && ! -L "$backup" ]]; then
+			if ! cp -a "$dst" "$backup" 2>/dev/null; then
+				warn "cannot back up Firefox launcher: $dst"
+			fi
+		fi
+	fi
+
+	local tmp
+	tmp="$(mktemp "${dst}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $dst"
+		return 0
+	}
+	if ! cp -a "$src" "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot copy Firefox launcher: $src"
+		return 0
+	fi
+	set_mode_from "$src" "$tmp"
+	if ! mv "$tmp" "$dst" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace Firefox launcher: $dst"
+		return 0
+	fi
+
+	info "installed Firefox launcher: $dst"
+	return 0
+}
+
+create_config_file() {
+	local path="$1"
+	local content="$2"
+
+	if [[ -e "$path" || -L "$path" ]]; then
+		info "skipped existing config: $path"
+		configs_skipped=$((configs_skipped + 1))
+		return 0
+	fi
+
+	local dir="${path%/*}"
+	if ! mkdir -p "$dir" 2>/dev/null; then
+		warn "cannot create config directory: $dir"
+		return 0
+	fi
+	if ! printf '%s' "$content" >"$path" 2>/dev/null; then
+		warn "cannot create config: $path"
+		return 0
+	fi
+
+	info "created config: $path"
+	configs_created=$((configs_created + 1))
+	return 0
+}
+
+create_terminal_configs() {
+	local shell="$bin/fish"
+	if [[ ! -x "$shell" ]]; then
+		shell="$bin/bash"
+	fi
+
+	create_config_file "$config/kitty/kitty.conf" "shell $shell"$'\n'
+	create_config_file "$config/foot/foot.ini" "[main]"$'\n'"shell=$shell"$'\n'
+	create_config_file "$config/ghostty/config.ghostty" "command = $shell"$'\n'
+}
+
+warn_missing_wrappers() {
+	local wrapper
+	for wrapper in mango-host-run mango-firefox mango-gpu-run; do
+		if [[ ! -x "$bin/$wrapper" ]]; then
+			warn "wrapper is missing or not executable: $bin/$wrapper"
+		fi
+	done
+}
+
+run_check() {
+	local failed=0
+	local wrapper
+	for wrapper in mango-host-run mango-firefox mango-gpu-run; do
+		if [[ -x "$bin/$wrapper" ]]; then
+			info "OK: wrapper: $bin/$wrapper"
+		else
+			printf 'FAIL: wrapper is missing or not executable: %s\n' \
+				"$bin/$wrapper" >&2
+			failed=1
+		fi
+	done
+
+	if ((enable_firefox)); then
+		local -A seen=()
+		local file
+		while IFS= read -r -d '' file; do
+			[[ -n "$file" ]] || continue
+			[[ -f "$file" ]] || continue
+			[[ -z "${seen[$file]+x}" ]] || continue
+			seen[$file]=1
+			is_firefox_entry "$file" || continue
+			if direct_wrapper_match "$file"; then
+				printf 'FAIL: firefox entry lacks env sanitizer: %s\n' \
+					"$file" >&2
+				failed=1
+			elif grep -q 'mango-firefox' "$file"; then
+				info "OK: firefox entry: $file"
+			elif ! firefox_exec_match "$file"; then
+				info "OK: no firefox Exec: $file"
+			else
+				printf 'FAIL: firefox entry is not patched: %s\n' \
+					"$file" >&2
+				failed=1
+			fi
+		done < <(discover_desktop_entries)
+
+		if [[ -x "$prefix/lib/firefox/firefox" ]]; then
+			if [[ -f "$bin/firefox" ]] &&
+				cmp -s "$bin/mango-firefox" "$bin/firefox"; then
+				info "OK: Firefox launcher: $bin/firefox"
+			else
+				printf 'FAIL: Firefox launcher is not integrated: %s\n' \
+					"$bin/firefox" >&2
+				failed=1
+			fi
+		fi
+	fi
+
+	if ((enable_terminals)); then
+		local -A seen=()
+		local file
+		while IFS= read -r -d '' file; do
+			[[ -n "$file" ]] || continue
+			[[ -f "$file" ]] || continue
+			[[ -z "${seen[$file]+x}" ]] || continue
+			seen[$file]=1
+			is_terminal_entry "$file" || continue
+			if direct_wrapper_match "$file"; then
+				printf 'FAIL: terminal entry lacks env sanitizer: %s\n' \
+					"$file" >&2
+				failed=1
+			elif grep -q 'mango-host-run' "$file"; then
+				info "OK: terminal entry: $file"
+			elif ! grep -q '^Exec=' "$file"; then
+				info "OK: no Exec: $file"
+			elif terminal_exec_match "$file"; then
+				printf 'FAIL: terminal entry is not patched: %s\n' \
+					"$file" >&2
+				failed=1
+			else
+				info "OK: no terminal Exec: $file"
+			fi
+		done < <(discover_desktop_entries)
+	fi
+
+	if ((failed)); then
+		printf 'mango-integrate: check failed\n' >&2
+		return 1
+	fi
+
+	info "mango-integrate: check passed"
+	return 0
+}
+
+if ((check_only)); then
+	run_check
+	exit $?
+fi
+
+warn_missing_wrappers
+
+if ((enable_firefox)); then
+	declare -A firefox_seen=()
+	while IFS= read -r -d '' file; do
+		[[ -n "$file" ]] || continue
+		[[ -f "$file" ]] || continue
+		[[ -z "${firefox_seen[$file]+x}" ]] || continue
+		firefox_seen[$file]=1
+		is_firefox_entry "$file" || continue
+		patch_firefox_desktop "$file"
+	done < <(discover_desktop_entries)
+
+	ensure_firefox_launcher
+fi
+
+if ((enable_terminals)); then
+	declare -A terminal_seen=()
+	while IFS= read -r -d '' file; do
+		[[ -n "$file" ]] || continue
+		[[ -f "$file" ]] || continue
+		[[ -z "${terminal_seen[$file]+x}" ]] || continue
+		terminal_seen[$file]=1
+		is_terminal_entry "$file" || continue
+		patch_terminal_desktop "$file"
+	done < <(discover_desktop_entries)
+
+	create_terminal_configs
+fi
+
+info "mango-integrate: firefox=${firefox_patched} patched/${firefox_skipped} skipped; terminals=${terminal_patched} patched/${terminal_skipped} skipped; configs=${configs_created} created/${configs_skipped} skipped"
