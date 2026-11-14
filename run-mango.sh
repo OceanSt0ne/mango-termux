@@ -216,7 +216,21 @@ start_termux_x11() {
     return 1
   fi
   : >"$x11_log"
-  nohup termux-x11 "$display" -ac -noreset >>"$x11_log" 2>&1 &
+  # Start Termux:X11 with its own renderer environment. The private Mesa/KGSL
+  # variables above belong to mango; leaking them into the X server changes
+  # how it selects its GL/Vulkan stack.
+  nohup env \
+    -u LD_LIBRARY_PATH \
+    -u LIBGL_DRIVERS_PATH \
+    -u GBM_BACKENDS_PATH \
+    -u MESA_LOADER_DRIVER_OVERRIDE \
+    -u GALLIUM_DRIVER \
+    -u FD_KGSL_DMABUF \
+    -u VK_DRIVER_FILES \
+    -u VK_ICD_FILENAMES \
+    -u EGL_PLATFORM \
+    -u __EGL_VENDOR_LIBRARY_FILENAMES \
+    termux-x11 "$display" -ac -noreset >>"$x11_log" 2>&1 &
   local i
   for i in $(seq 1 60); do
     x11_connected && return 0
