@@ -256,9 +256,24 @@ grun --shell vkmark
 ### Helper scripts and documentation
 
 - `termux-compat/install-freedreno-kgsl.sh`, `termux-compat/install-firefox-webgl.sh`, `termux-compat/mango-gpu-run`, `termux-compat/mango-firefox`, `termux-compat/fix-mango-config.sh`, `termux-compat/install-benchmark-fixes.sh`, `termux-compat/build-arch-turnip.sh`.
+- Installed integration helpers: `mango-integrate`, `mango-host-run`, `mango-gpu-run`, `mango-firefox`.
 - `termux-compat/scenefx-termux.patch`.
 - `termux/x11-check.c`.
 - `TERMUX_NOCTALIA.md` and `TERMUX_NOCTALIA_ru.md`: optional Arch proot integration guide, native KGSL setup, Noctalia launch script, and environment isolation. Not part of the required host port.
+
+### Universal default integrations
+
+- `meson install` installs `mango-integrate`, `mango-host-run`, `mango-gpu-run`, and `mango-firefox` unconditionally on Termux; optional packages are not needed at build time.
+- `mango-integrate` is idempotent: it patches existing Firefox and terminal `.desktop` entries, installs the Firefox launcher when Firefox exists, backs up once as `.mango-bak`, and creates kitty/foot/ghostty shell configs only if absent.
+- Terminals covered: kitty, kitty-open, foot, footclient, foot-server, and ghostty. Their desktop entries use `mango-host-run` with `/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH`.
+- `mango-host-run` sanitizes PRoot variables, restores native Termux paths/SHELL/PATH, loads `$PREFIX/tmp/mango-session.env`, defaults GUI variables, and execs the host command.
+- `mango-gpu-run` prefers the private Mesa Zink/Turnip stack, falls back to system Zink, and no longer hard-fails when they are absent.
+- Packages installed later with `pkg` or `.deb` are picked up on the next `mango-termux` start or by running `mango-integrate` manually.
+
+```bash
+mango-integrate --check
+mango-termux --restart
+```
 
 ## 3. Requirements & Build
 
@@ -353,7 +368,8 @@ cd ~/Projects/mango-termux
 - The script uses release `-O3`, installs `mango`, `mmsg`, `mangonag`, `mango-x11-check`, and `mango-termux`.
 - It creates private GPU copies in `$PREFIX/lib/mango-termux`, patches Android EGL/GLES references, and prepares `~/.config/mango` for a new install.
 - It also installs the private Freedreno/KGSL Mesa 27 stack in `$PREFIX/opt/mesa-kgsl` when `/dev/kgsl-3d0` exists; use `MANGO_SKIP_KGSL=1` to skip that step.
-- If Firefox is installed, it installs the `mango-firefox` WebGL wrapper and patches desktop entries; use `MANGO_SKIP_FIREFOX_FIX=1` to skip that step.
+- It always runs `$PREFIX/bin/mango-integrate` after installation; optional packages such as Firefox and terminals are not build prerequisites, and later installs are picked up on the next start.
+- `MANGO_SKIP_INTEGRATIONS=1` skips all automatic integrations; `MANGO_SKIP_FIREFOX_FIX=1` passes `--no-firefox`; `MANGO_SKIP_NOCTALIA_BRIDGE=1` passes `--no-terminals`.
 - The installed `$PREFIX/bin/mango` is the normal Mesa/Turnip-linked build; `$PREFIX/lib/mango-termux/mango` is the private Android EGL/AHardwareBuffer build.
 
 ### Manual build
@@ -407,13 +423,19 @@ mango-termux
 
 ### Launcher behavior
 
-- Uses `XDG_RUNTIME_DIR` or `$TMPDIR`; display defaults to `:0` or `MANGO_X11_DISPLAY`.
+- Refreshes integrations non-fatally on every start before launching the compositor.
+- Exports native `PREFIX`; sets `TMPDIR=$PREFIX/tmp`; normalizes `XDG_RUNTIME_DIR` under `$PREFIX`; sets `SHELL=$PREFIX/bin/fish`, falling back to `$PREFIX/bin/bash`.
+- Exports universal GUI variables: `MOZ_ENABLE_WAYLAND=1`, `GDK_BACKEND=wayland,x11`, `QT_QPA_PLATFORM=wayland;xcb`, `SDL_VIDEODRIVER=wayland`, `ELECTRON_OZONE_PLATFORM_HINT=auto`, `XDG_CURRENT_DESKTOP=mango`, and `XDG_SESSION_TYPE=wayland`.
+- Atomically saves the session environment to `$PREFIX/tmp/mango-session.env` with mode 0600, including PREFIX/TMPDIR/SHELL/GUI/Wayland/X11/DBus/Mesa/VK values.
+- Display defaults to `:0` or `MANGO_X11_DISPLAY`.
 - Reuses a live mango IPC socket; `--restart` replaces it.
 - Cleans stale Wayland locks/sockets using `flock`/PID checks.
 - Tests X11 with `mango-x11-check`; starts Termux:X11 if needed; removes stale `.X<n>-lock`/socket and retries once.
 - Starts Termux:X11 with `-ac -noreset` and a clean renderer environment.
 - Sets `WLR_BACKENDS=x11` by default.
 - Selects the renderer and binary as described above.
+- GPU detection prefers the private `$PREFIX/opt/mesa-kgsl`, then system `$PREFIX/lib/dri/kgsl_dri.so`, and the Freedreno ICD from the private tree or `$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`; if KGSL Gallium is absent but the ICD exists, it warns and uses stock Mesa instead of aborting.
+- When a host bus exists, `src/main.c` adds PREFIX/TMPDIR/SHELL and the GUI variables to `dbus-update-activation-environment`.
 - Exports nested Xwayland `DISPLAY` to children so X11 apps launched inside mango stay inside the nested session.
 - Unsets `LD_LIBRARY_PATH` before exec of the private AHB binary.
 
@@ -433,7 +455,9 @@ mango-termux
 | `PREFIX` | Termux prefix; default `/data/data/com.termux/files/usr`. |
 | `SCENEFX_DIR` | External scenefx source tree for the build. |
 | `MANGO_SKIP_KGSL` | `1` skips the automatic Freedreno/KGSL Mesa 27 install in `build-termux.sh`. |
-| `MANGO_SKIP_FIREFOX_FIX` | `1` skips the automatic Firefox WebGL wrapper install in `build-termux.sh`. |
+| `MANGO_SKIP_INTEGRATIONS` | `1` skips the automatic `mango-integrate` run in `build-termux.sh`. |
+| `MANGO_SKIP_FIREFOX_FIX` | `1` passes `--no-firefox` to `mango-integrate` from `build-termux.sh`. |
+| `MANGO_SKIP_NOCTALIA_BRIDGE` | `1` passes `--no-terminals` to `mango-integrate` from `build-termux.sh`. |
 | `MESA_KGSL_DIR` | Override the private KGSL install directory for the installer. |
 | `PROOT_DISTRO_NAME` | Arch proot container for optional Turnip/benchmark scripts. |
 | `JOBS`, `MESA_BUILD_DIR` | Arch Turnip build parallelism and work directory. |
@@ -532,7 +556,7 @@ MANGO_TERMUX_RENDERER=turnip mango-termux --restart -d 2>&1 | \
 
 ### Firefox and WebGL
 
-Firefox's native Wayland WebGL path needs the DMA-BUF-capable Zink/Turnip driver. The normal session uses native KGSL Gallium, which is faster for most clients but does not expose the EGL DMA-BUF extensions Firefox needs. `build-termux.sh` installs a Firefox wrapper when Firefox is present:
+Firefox's native Wayland WebGL path needs the DMA-BUF-capable Zink/Turnip driver. The normal session uses native KGSL Gallium, which is faster for most clients but does not expose the EGL DMA-BUF extensions Firefox needs. The wrappers are always installed; the Firefox launcher and desktop integration are added when Firefox exists, so a later Firefox install is picked up on the next session start or by `mango-integrate`:
 
 - `$PREFIX/bin/mango-gpu-run <command>` launches one client on the private Mesa 27 Zink/Turnip stack.
 - `$PREFIX/bin/mango-firefox` sets `MOZ_ENABLE_WAYLAND=1` when a Wayland socket exists, keeps `MOZ_X11_EGL=1` for XWayland fallback, and calls `mango-gpu-run`.
@@ -542,13 +566,14 @@ Firefox's native Wayland WebGL path needs the DMA-BUF-capable Zink/Turnip driver
 Run or repair it manually:
 
 ```bash
+mango-integrate --no-terminals
 ./termux-compat/install-firefox-webgl.sh
 ./termux-compat/install-firefox-webgl.sh --check
 ```
 
-- `MANGO_SKIP_FIREFOX_FIX=1` skips the automatic wrapper install in `build-termux.sh`.
-- Restart Firefox and Noctalia after installation.
-- After a Firefox package upgrade, rerun the installer so the wrapper is restored.
+- `MANGO_SKIP_FIREFOX_FIX=1` passes `--no-firefox` to the automatic integration.
+- Restart Firefox and Noctalia after installation, or restart the session with `mango-termux --restart`.
+- After a Firefox package upgrade, run `mango-integrate` (or the installer) so the wrapper is restored.
 - `mango-gpu-run "$PREFIX/lib/firefox/gfxtest" glx -w` should report `zink Vulkan ... Turnip ... 735`.
 
 ### Keybindings
@@ -607,6 +632,8 @@ grun --shell vkmark
 - `~/.config/mango/start-noctalia.sh` clears host Mesa/Vulkan/library variables before entering proot, so Arch uses its own Mesa 27 native KGSL (`renderer="FD735"`).
 - `NOCTALIA_GPU=kgsl` is the default; `NOCTALIA_GPU=0` forces llvmpipe; `NOCTALIA_GPU=zink` is legacy.
 - `MANGO_INSTANCE_SIGNATURE` makes Noctalia use mango's native `mango-ipc` workspace backend.
+- `mango-integrate` patches existing terminal `.desktop` entries for kitty, kitty-open, foot, footclient, foot-server, and ghostty to launch through `mango-host-run` with `/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH`.
+- It creates kitty/foot/ghostty shell configs only when absent, so existing configs are never overwritten, and it is safe when those packages are not installed.
 - The host port itself does not use PRoot.
 
 ## 5. Troubleshooting
@@ -639,7 +666,7 @@ MANGO_TERMUX_RENDERER=turnip mango-termux --restart -d 2>&1 | \
 - `Termux: Zink/Turnip renderer unavailable`: install `mesa-vulkan-icd-freedreno`, verify the ICD above, and expect fallback to AHB or pixman.
 - `Termux: AHB/EGL renderer unavailable, falling back to pixman`: rebuild with `./build-termux.sh` and make sure `patchelf` is installed and the private binary exists.
 - `Failed to open DRI3` / `Disabling DMA-BUF support`: normal for the Termux:X11 output; the port uses AHB + SHM.
-- `WebGL creation failed ... FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS`: Firefox inherited KGSL-only variables or bypassed the wrapper. Run `./termux-compat/install-firefox-webgl.sh`, then restart Firefox and Noctalia. `webgl.force-enabled` alone does not replace the missing EGL driver.
+- `WebGL creation failed ... FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS`: Firefox inherited KGSL-only variables or bypassed the wrapper. Run `mango-integrate` and restart the session with `mango-termux --restart`; the standalone `./termux-compat/install-firefox-webgl.sh` also works. `webgl.force-enabled` alone does not replace the missing EGL driver.
 
 ### FPS measurements and vkmark
 
@@ -685,5 +712,5 @@ cd ~/Projects/mango-termux
 
 - The script reconfigures existing scenefx and mango build directories as release `-O3` and refreshes installed binaries and private GPU copies.
 - It also reuses or installs the private Freedreno/KGSL stack unless `MANGO_SKIP_KGSL=1` is set.
-- If Firefox is installed, it restores the `mango-firefox` wrapper and desktop entries unless `MANGO_SKIP_FIREFOX_FIX=1` is set.
+- It reruns `mango-integrate`, restoring the `mango-firefox` wrapper and desktop entries unless `MANGO_SKIP_INTEGRATIONS=1`; `MANGO_SKIP_FIREFOX_FIX=1` and `MANGO_SKIP_NOCTALIA_BRIDGE=1` pass `--no-firefox` and `--no-terminals` respectively.
 - Restart the session after rebuilding: `mango-termux --restart`.
