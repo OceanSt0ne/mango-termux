@@ -136,8 +136,9 @@ Termux:GUI больше не используется.
     turnip), иначе turnip;
   - в режиме Turnip экспортирует приватные переменные Mesa 27
     (`LD_LIBRARY_PATH`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`,
-    `MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) для дочерних
-    процессов сессии и использует приватный Freedreno ICD, если он установлен;
+    `__EGL_VENDOR_LIBRARY_FILENAMES`, `MESA_LOADER_DRIVER_OVERRIDE=kgsl`,
+    `GALLIUM_DRIVER=kgsl`) для дочерних процессов сессии и использует приватный
+    Freedreno ICD, если он установлен;
     `termux/zink.c` ограничивает переменные Zink и Vulkan созданием рендерера
     самого mango;
   - если `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so` отсутствует, выводит
@@ -392,7 +393,8 @@ grun --shell vkmark
 ### Вспомогательные скрипты и документация
 
 - `termux-compat/install-freedreno-kgsl.sh`,
-  `termux-compat/fix-mango-config.sh`,
+  `termux-compat/install-firefox-webgl.sh`, `termux-compat/mango-gpu-run`,
+  `termux-compat/mango-firefox`, `termux-compat/fix-mango-config.sh`,
   `termux-compat/install-benchmark-fixes.sh`,
   `termux-compat/build-arch-turnip.sh`.
 - `termux-compat/scenefx-termux.patch`.
@@ -524,6 +526,8 @@ cd ~/Projects/mango-termux
 - Также устанавливает приватный Freedreno/KGSL Mesa 27 в
   `$PREFIX/opt/mesa-kgsl`, если существует `/dev/kgsl-3d0`; для пропуска
   используйте `MANGO_SKIP_KGSL=1`.
+- Если установлен Firefox, устанавливает WebGL-обёртку `mango-firefox` и
+  патчит `.desktop`-файлы; для пропуска используйте `MANGO_SKIP_FIREFOX_FIX=1`.
 - Установленный `$PREFIX/bin/mango` — обычная сборка с линковкой Mesa/Turnip;
   `$PREFIX/lib/mango-termux/mango` — приватная сборка Android
   EGL/AHardwareBuffer.
@@ -616,6 +620,7 @@ mango-termux
 | `PREFIX` | Префикс Termux; по умолчанию `/data/data/com.termux/files/usr`. |
 | `SCENEFX_DIR` | Внешнее дерево исходников scenefx для сборки. |
 | `MANGO_SKIP_KGSL` | `1` пропускает автоматическую установку Freedreno/KGSL Mesa 27 в `build-termux.sh`. |
+| `MANGO_SKIP_FIREFOX_FIX` | `1` пропускает автоматическую установку WebGL-обёртки Firefox в `build-termux.sh`. |
 | `MESA_KGSL_DIR` | Переопределяет каталог приватной установки KGSL для установщика. |
 | `PROOT_DISTRO_NAME` | Контейнер Arch proot для опциональных скриптов Turnip/бенчмарков. |
 | `JOBS`, `MESA_BUILD_DIR` | Параллелизм сборки Arch Turnip и рабочий каталог. |
@@ -720,6 +725,38 @@ MANGO_TERMUX_RENDERER=turnip mango-termux --restart -d 2>&1 | \
 - Принудительный pixman: `MANGO_TERMUX_RENDERER=pixman mango-termux`.
 - Прямой `$PREFIX/bin/mango` не задаёт окружение рендерера; используйте
   `mango-termux` или задавайте переменные явно.
+
+### Firefox и WebGL
+
+Нативному Wayland-пути WebGL в Firefox нужен Zink/Turnip с поддержкой DMA-BUF.
+Обычная сессия использует нативный KGSL Gallium: он быстрее для большинства
+клиентов, но не предоставляет EGL-расширения DMA-BUF, необходимые Firefox.
+`build-termux.sh` устанавливает обёртку Firefox, если Firefox установлен:
+
+- `$PREFIX/bin/mango-gpu-run <command>` запускает один клиент на приватном стеке
+  Mesa 27 Zink/Turnip.
+- `$PREFIX/bin/mango-firefox` задаёт `MOZ_ENABLE_WAYLAND=1` при наличии
+  Wayland-сокета, сохраняет `MOZ_X11_EGL=1` для отката на XWayland и вызывает
+  `mango-gpu-run`.
+- `$PREFIX/bin/firefox` заменяется обёрткой; исходный launcher пакета
+  сохраняется как `firefox.mango-bak`.
+- `.desktop`-файлы Firefox в Termux и Arch proot переводятся на
+  `mango-firefox` с резервными копиями `.mango-bak`.
+
+Ручная установка или восстановление:
+
+```bash
+./termux-compat/install-firefox-webgl.sh
+./termux-compat/install-firefox-webgl.sh --check
+```
+
+- `MANGO_SKIP_FIREFOX_FIX=1` пропускает автоматическую установку обёртки в
+  `build-termux.sh`.
+- После установки перезапустите Firefox и Noctalia.
+- После обновления пакета Firefox запустите установщик снова, чтобы вернуть
+  обёртку.
+- `mango-gpu-run "$PREFIX/lib/firefox/gfxtest" glx -w` должен показать
+  `zink Vulkan ... Turnip ... 735`.
 
 ### Горячие клавиши
 
@@ -829,6 +866,10 @@ MANGO_TERMUX_RENDERER=turnip mango-termux --restart -d 2>&1 | \
   приватный бинарник.
 - `Failed to open DRI3` / `Disabling DMA-BUF support`: нормально для output
   Termux:X11; порт использует AHB + SHM.
+- `WebGL creation failed ... FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS`: Firefox
+  получил только KGSL-переменные или обошёл обёртку. Запустите
+  `./termux-compat/install-firefox-webgl.sh`, затем перезапустите Firefox и
+  Noctalia. Один `webgl.force-enabled` не заменяет отсутствующий EGL-драйвер.
 
 ### Замеры FPS и vkmark
 
@@ -904,4 +945,6 @@ cd ~/Projects/mango-termux
   release `-O3` и обновляет установленные бинарники и приватные GPU-копии.
 - Он также переиспользует или устанавливает приватный Freedreno/KGSL-стек, если
   не задан `MANGO_SKIP_KGSL=1`.
+- Если установлен Firefox, восстанавливает обёртку `mango-firefox` и
+  `.desktop`-файлы, если не задан `MANGO_SKIP_FIREFOX_FIX=1`.
 - После пересборки перезапустите сессию: `mango-termux --restart`.
