@@ -116,6 +116,58 @@ fi
 export XDG_RUNTIME_DIR
 chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
+persist_session_env() {
+  local dir="$prefix/tmp"
+  local out="$dir/mango-session.env"
+  local tmp var
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    echo "warning: cannot create $dir; skipping session env file." >&2
+    return 0
+  fi
+  if ! tmp="$(mktemp "$dir/.mango-session.env.XXXXXX" 2>/dev/null)"; then
+    echo "warning: cannot create a temp file in $dir; skipping session env file." >&2
+    return 0
+  fi
+  {
+    printf 'export WAYLAND_DISPLAY=%q\n' "${WAYLAND_DISPLAY:-wayland-0}" &&
+    printf 'export DISPLAY=%q\n' "${DISPLAY:-}" &&
+    printf 'export XDG_RUNTIME_DIR=%q\n' "${XDG_RUNTIME_DIR:-}" &&
+    printf 'export XDG_CURRENT_DESKTOP=%q\n' "${XDG_CURRENT_DESKTOP:-mango}" &&
+    printf 'export XDG_SESSION_TYPE=%q\n' "${XDG_SESSION_TYPE:-wayland}" &&
+    for var in \
+      DBUS_SESSION_BUS_ADDRESS \
+      XCURSOR_THEME \
+      XCURSOR_SIZE \
+      MANGO_INSTANCE_SIGNATURE \
+      MANGO_TERMUX_RENDERER \
+      MANGO_TERMUX_GPU \
+      LD_LIBRARY_PATH \
+      LIBGL_DRIVERS_PATH \
+      GBM_BACKENDS_PATH \
+      MESA_LOADER_DRIVER_OVERRIDE \
+      GALLIUM_DRIVER \
+      __EGL_VENDOR_LIBRARY_FILENAMES \
+      VK_DRIVER_FILES \
+      VK_ICD_FILENAMES \
+      FD_KGSL_DMABUF; do
+      if [[ -n "${!var:-}" ]]; then
+        printf 'export %s=%q\n' "$var" "${!var}"
+      fi
+    done
+  } >"$tmp" 2>/dev/null || {
+    rm -f "$tmp"
+    echo "warning: cannot write $out; skipping session env file." >&2
+    return 0
+  }
+  chmod 0600 "$tmp" 2>/dev/null || true
+  if ! mv -f "$tmp" "$out" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "warning: cannot install $out; skipping session env file." >&2
+    return 0
+  fi
+  chmod 0600 "$out" 2>/dev/null || true
+}
+
 # Remove wayland-N sockets/locks left behind by a killed compositor, so mango
 # gets a predictable socket name (wayland-0) again. A live compositor holds an
 # exclusive flock on its lock file, which is how we distinguish the two cases.
@@ -304,4 +356,5 @@ if [[ "$bin" == "$priv_bin" ]]; then
   # dependencies in the Termux namespace; RUNPATH is sufficient here.
   unset LD_LIBRARY_PATH
 fi
+persist_session_env
 exec "$bin" "$@"
