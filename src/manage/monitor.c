@@ -1440,9 +1440,14 @@ void handle_output_frame(struct wl_listener *listener, void *data) {
 		 * the swapchain is full because Present is still pending. Do not send
 		 * frame-done or re-arm the frame loop here: clients would believe the
 		 * frame was presented and keep rendering at event-loop speed while the
-		 * display is limited by Present. The next backend Present/Idle event
-		 * will drive the retry once the swapchain has room.
+		 * display is limited by Present.
+		 *
+		 * A failed commit does not always leave a backend Present/Idle event
+		 * behind, so explicitly request a normal frame event as a retry. This
+		 * is a no-op while a frame is already pending; in that case the
+		 * backend Present/Idle event remains the retry path.
 		 */
+		wlr_output_schedule_frame(m->wlr_output);
 		return;
 	}
 
