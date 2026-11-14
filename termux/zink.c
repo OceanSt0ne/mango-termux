@@ -40,6 +40,7 @@ static bool zink_active;
  */
 struct zink_env {
 	char *vk_icd;
+	char *vk_driver_files;
 	char *mesa_loader;
 	char *gallium;
 	char *egl_platform;
@@ -61,6 +62,7 @@ static void restore_env(const char *name, char *value) {
 
 static void zink_env_save(struct zink_env *env) {
 	env->vk_icd = save_env("VK_ICD_FILENAMES");
+	env->vk_driver_files = save_env("VK_DRIVER_FILES");
 	env->mesa_loader = save_env("MESA_LOADER_DRIVER_OVERRIDE");
 	env->gallium = save_env("GALLIUM_DRIVER");
 	env->egl_platform = save_env("EGL_PLATFORM");
@@ -68,6 +70,7 @@ static void zink_env_save(struct zink_env *env) {
 
 static void zink_env_restore(struct zink_env *env) {
 	restore_env("VK_ICD_FILENAMES", env->vk_icd);
+	restore_env("VK_DRIVER_FILES", env->vk_driver_files);
 	restore_env("MESA_LOADER_DRIVER_OVERRIDE", env->mesa_loader);
 	restore_env("GALLIUM_DRIVER", env->gallium);
 	restore_env("EGL_PLATFORM", env->egl_platform);
@@ -81,8 +84,16 @@ static void zink_env_apply(void) {
 
 	char icd[PATH_MAX];
 	int len = snprintf(icd, sizeof(icd),
-		"%s/share/vulkan/icd.d/freedreno_icd.aarch64.json", prefix);
+		"%s/opt/mesa-kgsl/share/vulkan/icd.d/freedreno_icd.aarch64.json",
+		prefix);
+	if (len < 0 || (size_t)len >= sizeof(icd) ||
+			access(icd, R_OK) != 0) {
+		len = snprintf(icd, sizeof(icd),
+			"%s/share/vulkan/icd.d/freedreno_icd.aarch64.json",
+			prefix);
+	}
 	if (len > 0 && (size_t)len < sizeof(icd) && access(icd, R_OK) == 0) {
+		setenv("VK_DRIVER_FILES", icd, 1);
 		setenv("VK_ICD_FILENAMES", icd, 1);
 	} else {
 		wlr_log(WLR_ERROR,
