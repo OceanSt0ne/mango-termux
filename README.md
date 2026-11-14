@@ -70,6 +70,12 @@ Termux:GUI is no longer used.
 - [`termux-compat/fix-mango-config.sh`](termux-compat/fix-mango-config.sh) —
   migrates older `~/.config/mango/*.conf` key names to the current mango 0.18
   names, comments out removed options, and validates the result with `mango -p`.
+- [`termux-compat/build-arch-turnip.sh`](termux-compat/build-arch-turnip.sh) —
+  builds Mesa Turnip with the KGSL backend inside the Arch proot.
+- [`termux-compat/install-benchmark-fixes.sh`](termux-compat/install-benchmark-fixes.sh)
+  — fixes the native `glmark2`/`glmark2-es2` runtime dependency, installs
+  `vkmark` wrappers with an assimp/KGSL Turnip ICD, and keeps the bionic Mesa
+  environment out of `glibc-runner`.
 - `build-termux.sh` — builds the bundled patched scenefx + mango, and private
   GPU copies of `mango`/`libwlroots`/`libscenefx` in
   `$PREFIX/lib/mango-termux`.
@@ -341,6 +347,34 @@ mango -p -c ~/.config/mango/config.conf
 
 The script creates a timestamped backup in `~/.config/mango/`, comments out
 options removed in the current release, and is safe to run again.
+
+### Benchmark fixes
+
+The native `glmark2` and the glibc `vkmark` package need a small compatibility
+layer on Termux. Install the native benchmark and the helper first:
+
+```bash
+pkg install glmark2 libjpeg-turbo patchelf binutils
+```
+
+`vkmark` must be installed from the glibc repository. For its Vulkan backend the
+Arch proot needs `assimp` and a KGSL-enabled Turnip; build the latter with
+`termux-compat/build-arch-turnip.sh` if it is not already installed. Then run:
+
+```bash
+./termux-compat/build-arch-turnip.sh   # only if Arch Turnip has no KGSL yet
+./termux-compat/install-benchmark-fixes.sh
+```
+
+The installer backs up changed files, fixes the native `glmark2` `libjpeg`
+dependency, installs wrappers in `$PREFIX/glibc/bin`, and stops `glibc-runner`
+from inheriting the bionic Mesa/KGSL environment. Afterwards:
+
+```bash
+glmark2
+glmark2-es2
+grun --shell vkmark
+```
 
 Default keybindings (`config.conf`):
 
