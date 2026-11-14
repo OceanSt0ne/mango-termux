@@ -9,8 +9,9 @@
 # the private GPU libraries used by mango-termux for effects.
 #
 # Environment:
-#   PREFIX        Termux prefix (default: /data/data/com.termux/files/usr)
-#   SCENEFX_DIR   alternative scenefx source tree (default: <repository>/scenefx)
+#   PREFIX          Termux prefix (default: /data/data/com.termux/files/usr)
+#   SCENEFX_DIR     alternative scenefx source tree (default: <repository>/scenefx)
+#   MANGO_SKIP_KGSL 1 = do not install the private Freedreno/KGSL Mesa 27 stack
 set -euo pipefail
 
 # Resolve our own path so the script works from any cwd and through symlinks.
@@ -44,6 +45,15 @@ command -v Xwayland >/dev/null 2>&1 || missing="$missing xwayland"
 [[ -e "$PREFIX/lib/dri/zink_dri.so" ]] || missing="$missing mesa"
 [[ -f "$PREFIX/lib/libvulkan_freedreno.so" ]] || \
   missing="$missing mesa-vulkan-icd-freedreno"
+# The private KGSL Mesa 27 stack is installed from lfdevs .deb packages unless
+# explicitly skipped. The public Termux Mesa lacks /dev/kgsl-3d0 support.
+if [[ "${MANGO_SKIP_KGSL:-0}" != "1" && -e /dev/kgsl-3d0 ]]; then
+  command -v dpkg-deb >/dev/null 2>&1 || missing="$missing dpkg"
+  if ! command -v curl >/dev/null 2>&1 &&
+     ! command -v wget >/dev/null 2>&1; then
+    missing="$missing curl"
+  fi
+fi
 if [[ -n "$missing" ]]; then
   echo "Missing build dependencies:$missing"
   echo "Install e.g.: pkg install clang pkg-config ninja patchelf git python-pip \\"
@@ -51,6 +61,7 @@ if [[ -n "$missing" ]]; then
   echo "  libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \\"
   echo "  libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \\"
   echo "  littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp"
+  echo "  dpkg curl"
   echo "  python -m pip install meson"
   exit 1
 fi
@@ -166,6 +177,16 @@ if [[ ! -f "$HOME/.config/mango/config.conf" ]]; then
 fi
 if [[ ! -f "$HOME/.config/mango/config.toml" ]]; then
   cp "$PREFIX/etc/mango/config.toml" "$HOME/.config/mango/config.toml"
+fi
+
+if [[ "${MANGO_SKIP_KGSL:-0}" != "1" && -e /dev/kgsl-3d0 ]]; then
+  echo
+  echo "Installing Freedreno/KGSL Mesa 27 for session clients..."
+  if ! "$self_dir/termux-compat/install-freedreno-kgsl.sh"; then
+    echo "warning: Freedreno/KGSL Mesa 27 was not installed." >&2
+    echo "  Install it manually: $self_dir/termux-compat/install-freedreno-kgsl.sh" >&2
+    echo "  Without it, session GL clients fall back to llvmpipe." >&2
+  fi
 fi
 
 echo
