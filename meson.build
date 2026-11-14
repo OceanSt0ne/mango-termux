@@ -88,7 +88,6 @@ endif
 # define compilation args
 c_args = [
   '-g',
-  '-O2',
   '-U_FORTIFY_SOURCE',
   '-Wno-unused-function',
   '-Wno-unused-parameter',
