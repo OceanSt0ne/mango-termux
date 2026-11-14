@@ -59,15 +59,24 @@ if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
   # termux/zink.c saves/restores these variables around mango's own renderer,
   # so mango still creates its Zink/Turnip context.
   mesa="$prefix/opt/mesa-kgsl"
-  if [[ -d "$mesa/lib" ]]; then
+  icd="$mesa/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+  if [[ -f "$mesa/lib/dri/kgsl_dri.so" ]]; then
     export LD_LIBRARY_PATH="$mesa/lib"
     export LIBGL_DRIVERS_PATH="$mesa/lib/dri"
     export GBM_BACKENDS_PATH="$mesa/lib/gbm"
     export MESA_LOADER_DRIVER_OVERRIDE=kgsl
     export GALLIUM_DRIVER=kgsl
-    unset VK_DRIVER_FILES VK_ICD_FILENAMES
+    if [[ -f "$icd" ]]; then
+      export VK_DRIVER_FILES="$icd"
+      export VK_ICD_FILENAMES="$icd"
+    else
+      unset VK_DRIVER_FILES VK_ICD_FILENAMES
+    fi
   else
     # Fallback: let host Mesa choose; do not leak a stale zink override.
+    echo "warning: Freedreno/KGSL Mesa 27 not installed in $mesa." >&2
+    echo "  Install it with termux-compat/install-freedreno-kgsl.sh;" >&2
+    echo "  otherwise session GL clients fall back to llvmpipe." >&2
     unset LD_LIBRARY_PATH LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH
     unset MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER
     unset VK_DRIVER_FILES VK_ICD_FILENAMES
