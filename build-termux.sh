@@ -12,6 +12,7 @@
 #   PREFIX          Termux prefix (default: /data/data/com.termux/files/usr)
 #   SCENEFX_DIR     alternative scenefx source tree (default: <repository>/scenefx)
 #   MANGO_SKIP_KGSL 1 = do not install the private Freedreno/KGSL Mesa 27 stack
+#   MANGO_SKIP_FIREFOX_FIX 1 = do not install the Firefox WebGL wrapper
 set -euo pipefail
 
 # Resolve our own path so the script works from any cwd and through symlinks.
@@ -186,6 +187,16 @@ if [[ "${MANGO_SKIP_KGSL:-0}" != "1" && -e /dev/kgsl-3d0 ]]; then
     echo "warning: Freedreno/KGSL Mesa 27 was not installed." >&2
     echo "  Install it manually: $self_dir/termux-compat/install-freedreno-kgsl.sh" >&2
     echo "  Without it, session GL clients fall back to llvmpipe." >&2
+  fi
+fi
+
+if [[ "${MANGO_SKIP_FIREFOX_FIX:-0}" != "1" &&
+      -x "$PREFIX/lib/firefox/firefox" ]]; then
+  echo
+  echo "Installing Firefox WebGL wrapper..."
+  if ! "$self_dir/termux-compat/install-firefox-webgl.sh"; then
+    echo "warning: Firefox WebGL wrapper was not installed." >&2
+    echo "  Run manually: $self_dir/termux-compat/install-firefox-webgl.sh" >&2
   fi
 fi
 
