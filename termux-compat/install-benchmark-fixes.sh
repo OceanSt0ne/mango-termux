@@ -181,7 +181,10 @@ main() {
 	need patchelf patchelf
 	need readelf binutils
 
-	[[ -d "$MESA_DIR/lib" ]] || echo "warning: $MESA_DIR/lib not found; native benchmarks may use system Mesa" >&2
+	[[ -d "$MESA_DIR/lib" ]] || {
+		echo "warning: $MESA_DIR/lib not found; native benchmarks may use system Mesa" >&2
+		echo "  Install KGSL Mesa 27 with termux-compat/install-freedreno-kgsl.sh" >&2
+	}
 
 	patch_native_glmark2 "$PREFIX/bin/glmark2"
 	patch_native_glmark2 "$PREFIX/bin/glmark2-es2"
