@@ -68,6 +68,10 @@ Termux:GUI больше не используется.
 - `termux-compat/scenefx-termux.patch` — патч scenefx: pixman-fallback,
   поддержка внешнего EGLImage-провайдера (AHardwareBuffer), работа без
   `EGL_EXT_image_dma_buf_import` и `EGL_EXT_platform_base`.
+- [`termux-compat/fix-mango-config.sh`](termux-compat/fix-mango-config.sh) —
+  переводит старые имена ключей в `~/.config/mango/*.conf` на актуальные для
+  mango 0.18, комментирует удалённые опции и проверяет результат через
+  `mango -p`.
 - `build-termux.sh` — сборка встроенного scenefx с патчем + mango, а также
   приватные GPU-копии `mango`/`libwlroots`/`libscenefx` в
   `$PREFIX/lib/mango-termux`.
@@ -325,6 +329,19 @@ mango
 2. `~/.config/mango/config.toml`
 3. `$PREFIX/etc/mango/config.conf`
 4. `$PREFIX/etc/mango/config.toml`
+
+Если после обновления mango показывает плашку с ошибками, переведите старые
+имена ключей в `.conf` через
+[`termux-compat/fix-mango-config.sh`](termux-compat/fix-mango-config.sh):
+
+```bash
+./termux-compat/fix-mango-config.sh
+mango -p -c ~/.config/mango/config.conf
+```
+
+Скрипт создаёт резервную копию с меткой времени в `~/.config/mango/`,
+комментирует удалённые в текущей версии опции и безопасен для повторного
+запуска.
 
 Горячие клавиши по умолчанию (`config.conf`):
 
