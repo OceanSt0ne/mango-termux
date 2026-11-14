@@ -1,0 +1,35 @@
+#!/data/data/com.termux/files/usr/bin/bash
+#
+# Launch Firefox on the private Mesa 27 Zink/Turnip stack.
+#
+# Firefox's native Wayland WebGL path needs EGL DMA-BUF support. The session's
+# native KGSL Gallium driver does not provide it, so Firefox is launched with
+# the DMA-BUF-capable Zink driver instead. Other session clients keep KGSL.
+set -euo pipefail
+
+prefix="${PREFIX:-/data/data/com.termux/files/usr}"
+firefox="$prefix/lib/firefox/firefox"
+
+if [[ ! -x "$firefox" ]]; then
+	echo "error: Firefox is not installed at $firefox" >&2
+	exit 1
+fi
+
+if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+	if [[ "$WAYLAND_DISPLAY" == /* ]]; then
+		wayland_socket="$WAYLAND_DISPLAY"
+	else
+		wayland_socket="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/$WAYLAND_DISPLAY"
+	fi
+	if [[ -S "$wayland_socket" ]]; then
+		export MOZ_ENABLE_WAYLAND=1
+	else
+		export MOZ_ENABLE_WAYLAND=0
+	fi
+else
+	export MOZ_ENABLE_WAYLAND=0
+fi
+
+export MOZ_X11_EGL=1
+
+exec "$prefix/bin/mango-gpu-run" "$firefox" "$@"
