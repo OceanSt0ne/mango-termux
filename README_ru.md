@@ -94,9 +94,11 @@ proot-контейнер при этом не запускается.
   SHM, поскольку Termux:X11 не предоставляет пригодный DRI3 DRM fd.
 - Резервные пути: системный Android EGL + AHardwareBuffer (Adreno), затем
   pixman.
-- Клиенты сессии и вложенный Xwayland используют приватный нативный путь
-  Mesa 27 Freedreno/KGSL, если установлены `$PREFIX/opt/mesa-kgsl` и
-  `$PREFIX/opt/xwayland-kgsl`.
+- Клиенты сессии используют приватный нативный путь Mesa 27 Freedreno/KGSL,
+  если установлен `$PREFIX/opt/mesa-kgsl`. Вложенный Xwayland по умолчанию
+  работает через стабильную обёртку без glamor и не гарантирует DRI3/нативный
+  KGSL; `MANGO_XWAYLAND_GLAMOR=1` и `$PREFIX/opt/xwayland-kgsl` включают
+  DRI3/glamor KGSL, но могут вернуть падения X-сервера.
 - Конфигурация по умолчанию: `$PREFIX/etc/mango`; пользовательская:
   `~/.config/mango`.
 
@@ -107,6 +109,10 @@ proot-контейнер при этом не запускается.
 - В Termux:X11 нет DRI3 DRM fd, поэтому путь вывода — AHB + SHM. Копирование
   AHB→SHM, выровненный stride AHB и явная синхронизация GPU могут ограничивать
   вывод на высоких разрешениях.
+- По умолчанию вложенный Xwayland работает через стабильную обёртку без glamor
+  с отключённым для клиентов DRI3; аппаратный GLX требует
+  `MANGO_XWAYLAND_GLAMOR=1` и пропатченного KGSL-сервера и может быть
+  нестабильным.
 - Turnip/Zink добавляет накладные расходы на трансляцию в Vulkan; на некоторых
   нагрузках AHB может быть быстрее.
 - Приложения, запущенные из внешнего shell с `DISPLAY=:0`, открываются в
@@ -180,9 +186,12 @@ proot-контейнер при этом не запускается.
     X-соединении, чтобы избежать безвредных ошибок `BadAtom`/`ChangeProperty`;
   - сохраняет доступным вторичный headless-бэкенд.
 - `run-mango.sh` / установленный `$PREFIX/bin/mango-termux`:
-  - определяет собственный путь и `PREFIX`; использует
-    `$PREFIX/opt/xwayland-kgsl/bin/Xwayland`, если он присутствует, кроме
-    случаев когда задан `WLR_XWAYLAND`;
+  - определяет собственный путь и `PREFIX`; по умолчанию запускает вложенный
+    Xwayland через стабильную обёртку `$PREFIX/tmp/mango-xwayland` без glamor
+    (`XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1`, аргументы `+iglx -shm`);
+    `MANGO_XWAYLAND_GLAMOR=1` возвращает DRI3/glamor KGSL через
+    `$PREFIX/opt/xwayland-kgsl/bin/Xwayland` для аппаратного GLX, если сервер
+    установлен; `WLR_XWAYLAND` явно задаёт реальный сервер для обёртки;
   - приоритет рендерера: сначала `MANGO_TERMUX_RENDERER`, затем совместимый
     `MANGO_TERMUX_GPU` (`0` → pixman, `1`/`ahb` → ahb, `turnip`/`zink` →
     turnip), иначе turnip;
@@ -295,8 +304,13 @@ proot-контейнер при этом не запускается.
 - Сессия и дочерние клиенты используют приватный нативный Freedreno/KGSL
   Mesa 27 (`MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) и сообщают
   `FD735`.
-- Штатный Xwayland в Termux собран с `-Dglamor=false`, поэтому вложенные
-  X11-клиенты откатываются на llvmpipe. Порт использует
+- Для X11-клиентов `run-mango.sh` по умолчанию использует стабильную обёртку
+  `$PREFIX/tmp/mango-xwayland` без glamor: `XWAYLAND_NO_GLAMOR=1`,
+  `LIBGL_DRI3_DISABLE=1`, аргументы Xwayland `+iglx -shm`. Это предотвращает
+  падение X-сервера `:1` из-за DRI3/DRM ioctl (`os_same_file_description` /
+  `XIO fatal IO error 25`).
+- `MANGO_XWAYLAND_GLAMOR=1` возвращает DRI3/glamor KGSL для аппаратного GLX и
+  может вернуть падения. В этом режиме используется
   `$PREFIX/opt/xwayland-kgsl/bin/Xwayland`, если он установлен:
   - glamor/DRI3 поверх `/dev/kgsl-3d0` без `/dev/dri` и `wl_drm`;
   - сервер Xwayland запускается с приватной Mesa 27 Zink/Turnip
@@ -307,15 +321,27 @@ proot-контейнер при этом не запускается.
     импортировать, а не показывать чёрные окна;
   - резервный штатный сервер — `$PREFIX/bin/Xwayland.stock`; обёртка —
     `$PREFIX/bin/Xwayland`; переопределение — `WLR_XWAYLAND`.
-- Проверка из терминала внутри mango:
+- Штатный Xwayland в Termux собран с `-Dglamor=false`, поэтому без
+  `MANGO_XWAYLAND_GLAMOR=1` вложенные X11-клиенты не получают DRI3/glamor и
+  могут откатываться на llvmpipe. `LIBGL_DRI3_DISABLE` — клиентская подсказка
+  Mesa, не единственный переключатель DRI3.
+- Вложенный Xwayland обычно `:1`, если внешний Termux:X11 — `:0`; проверяйте
+  `echo $DISPLAY`.
+- Проверка из терминала внутри mango после подтверждения вложенного дисплея:
 
 ```sh
-DISPLAY=:1 glxinfo -B | grep -E 'Accelerated|OpenGL renderer'
-# Accelerated: yes
-# OpenGL renderer string: FD735
+echo "$DISPLAY"
+glxinfo -b | grep -E 'direct rendering|OpenGL renderer'
+glinfo -b | grep -E 'direct rendering|OpenGL renderer'
 ```
 
-- Разовая диагностика Zink:
+- Ни `glxinfo -b`, ни bionic `glinfo -b` не должны ронять X-сервер. glibc
+  `glinfo`/`glxinfo` могут сообщать об отсутствии RGB GLX visual, так как glibc
+  Mesa 24 не поддерживает KGSL; это ограничение визуала на стороне клиента, а
+  не доказательство падения Xwayland. `LIBGL_DRI3_DISABLE` — клиентская
+  подсказка Mesa, не единственный переключатель: настройка сервера без glamor и
+  аргументы `+iglx -shm` не менее важны.
+- Разовая диагностика Zink, когда доступен glibc GLX visual:
 
 ```sh
 MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink glxinfo -B
@@ -501,8 +527,9 @@ mango-termux --restart
   KGSL-драйвера Gallium, поэтому без неё дочерние GL-клиенты откатываются на
   llvmpipe.
 - Опционально: пропатченный Xwayland в `$PREFIX/opt/xwayland-kgsl` для
-  DRI3/GLX-ускорения вложенных X11-клиентов. Без него Xwayland использует
-  штатный путь.
+  DRI3/GLX-ускорения вложенных X11-клиентов при `MANGO_XWAYLAND_GLAMOR=1`. По
+  умолчанию используется стабильная обёртка без glamor; без неё Xwayland
+  использует штатный путь и может не давать аппаратный GLX.
 
 ### Пакеты Termux
 
@@ -697,6 +724,10 @@ mango-termux
   Termux:X11; удаляет устаревшие `.X<n>-lock`/сокет и повторяет попытку один
   раз.
 - Запускает Termux:X11 с `-ac -noreset` и чистым окружением рендерера.
+- По умолчанию запускает вложенный Xwayland через стабильную обёртку
+  `$PREFIX/tmp/mango-xwayland` без glamor (`XWAYLAND_NO_GLAMOR=1`,
+  `LIBGL_DRI3_DISABLE=1`, аргументы `+iglx -shm`); `MANGO_XWAYLAND_GLAMOR=1`
+  возвращает DRI3/glamor KGSL для аппаратного GLX и может вернуть падения.
 - Задаёт `WLR_BACKENDS=x11` по умолчанию.
 - Выбирает рендерер и бинарник, как описано выше.
 - Определение GPU предпочитает приватный `$PREFIX/opt/mesa-kgsl`, затем системный
@@ -707,7 +738,9 @@ mango-termux
 - Нативная Noctalia наследует существующую D-Bus-сессию или запускается через
   `dbus-run-session`; host-мост и его обёртка удалены.
 - Экспортирует `DISPLAY` вложенного Xwayland дочерним процессам, чтобы
-  X11-приложения, запущенные внутри mango, оставались во вложенной сессии.
+  X11-приложения, запущенные внутри mango, оставались во вложенной сессии;
+  вложенный Xwayland обычно `:1`, если внешний Termux:X11 — `:0` (проверяйте
+  `echo $DISPLAY`).
 - Снимает `LD_LIBRARY_PATH` перед exec приватного AHB-бинарника.
 
 ### Переменные окружения
@@ -721,14 +754,17 @@ mango-termux
 | `MANGO_TERMUX_RENDERER` | `turnip` (по умолчанию), `ahb` или `pixman`. |
 | `MANGO_TERMUX_GPU` | Селектор совместимости: `0` = pixman, `1`/`ahb` = ahb, `turnip`/`zink` = turnip. |
 | `MANGO_RESTART` | `1` останавливает работающий экземпляр перед запуском. |
-| `WLR_XWAYLAND` | Переопределяет путь к серверу Xwayland. |
+| `WLR_XWAYLAND` | Переопределяет путь к серверу Xwayland и источник, используемый сгенерированной стабильной обёрткой. |
+| `MANGO_XWAYLAND_GLAMOR` | `1` включает DRI3/glamor KGSL для аппаратного GLX и может вернуть падения X-сервера; по умолчанию `0` — стабильная обёртка без glamor. |
+| `XWAYLAND_NO_GLAMOR` | `1` в стабильной обёртке по умолчанию; отключает glamor в Xwayland. |
+| `LIBGL_DRI3_DISABLE` | `1` в стабильной обёртке по умолчанию; клиентская подсказка Mesa для отключения DRI3, не единственный переключатель. |
 | `XDG_RUNTIME_DIR` | Каталог runtime Wayland/IPC; по умолчанию `$TMPDIR`. |
 | `PREFIX` | Префикс Termux; по умолчанию `/data/data/com.termux/files/usr`. |
 | `SCENEFX_DIR` | Внешнее дерево исходников scenefx для сборки. |
 | `MANGO_SKIP_KGSL` | `1` пропускает автоматическую установку Freedreno/KGSL Mesa 27 в `build-termux.sh`. |
 | `MANGO_SKIP_INTEGRATIONS` | `1` пропускает автоматический запуск `mango-integrate` в `build-termux.sh`. |
 | `MANGO_SKIP_FIREFOX_FIX` | `1` передаёт `--no-firefox` в `mango-integrate` из `build-termux.sh`. |
-| `NOCTALIA_ROOTFS` | Явный путь к rootfs Arch с `usr/bin/noctalia`; иначе выполняется поиск в proot-distro. |
+| `NOCTALIA_ROOTFS` | Явный путь к rootfs Arch с `usr/bin/noctalia`; иначе выполняется поиск в proot-distro. При отсутствии пригодного rootfs установщик без флагов запускает авто-bootstrap (`proot-distro` + `pacman`), если не указан `--no-bootstrap`; явный непригодный путь завершается ошибкой без автоустановки. |
 | `MESA_KGSL_DIR` | Переопределяет каталог приватной установки KGSL для установщика. |
 | `PROOT_DISTRO_NAME` | Контейнер Arch proot для опциональных скриптов Turnip/бенчмарков. |
 | `JOBS`, `MESA_BUILD_DIR` | Параллелизм сборки Arch Turnip и рабочий каталог. |
@@ -904,10 +940,18 @@ foot
   ограничены созданием рендерера mango.
 - Дочерние GL-клиенты используют приватный нативный Freedreno/KGSL Mesa 27
   (`FD735`), а не глобальный Zink.
-- Вложенный Xwayland даёт X11-клиентам DRI3 и нативный KGSL, когда установлен
-  пропатченный сервер.
+- По умолчанию вложенный Xwayland использует стабильную обёртку без glamor,
+  поэтому X11-клиенты не гарантированно получают DRI3 и нативный KGSL.
+  DRI3/glamor KGSL доступен только при `MANGO_XWAYLAND_GLAMOR=1` и установленном
+  пропатченном сервере, но может вернуть падения X-сервера.
+- Вложенный Xwayland обычно `:1`, если внешний Termux:X11 — `:0`; проверяйте
+  `echo $DISPLAY`.
+- X11-клиенты можно проверять без падения сервера через `glxinfo -b` или bionic
+  `glinfo -b`; glibc `glinfo`/`glxinfo` могут сообщать об отсутствии RGB GLX
+  visual, так как glibc Mesa 24 не поддерживает KGSL.
 - Приложения, запущенные из shell с внешним `DISPLAY=:0`, всё равно открываются
-  вне mango; запускайте их внутри mango или через `mango-termux -s`.
+  вне mango; запускайте их внутри mango или через `mango-termux -s`. Внутри mango
+  унаследованный `DISPLAY` указывает на вложенный Xwayland.
 
 ### Бенчмарки
 
@@ -928,6 +972,14 @@ grun --shell vkmark
 
 ### Нативная Noctalia без proot
 
+- `./install-noctalia-termux.sh` без флагов ищет rootfs; если пригодного нет,
+  автоматически запускает bootstrap (`proot-distro install archlinuxarm`, затем
+  `pacman -Syu` и `pacman -S --needed noctalia`). Нужны сеть и `proot-distro`.
+  `--no-bootstrap` отключает авто-bootstrap и завершается ошибкой; явные
+  `--rootfs PATH` или `NOCTALIA_ROOTFS` при непригодном пути по-прежнему падают
+  без автоустановки;
+  `--check` только читает и никогда не bootstrap-ит. Существующий `archlinuxarm`
+  не переустанавливается, а ремонтируется повторным запуском `pacman`.
 - Noctalia 5.4.1 — один ELF по пути
   `$PREFIX/var/lib/proot-distro/containers/archlinuxarm/rootfs/usr/bin/noctalia`;
   отдельного стека quickshell/qs/QML нет.
@@ -981,17 +1033,32 @@ grun --shell vkmark
 ### Диагностика рендерера: Turnip/KGSL или llvmpipe
 
 - `FD735` означает нативный Freedreno/KGSL для сессии или X11-клиентов.
+- При стабильной обёртке Xwayland без glamor по умолчанию вложенные X11-клиенты
+  не получают DRI3 или нативный KGSL; аппаратный GLX требует
+  `MANGO_XWAYLAND_GLAMOR=1` и пропатченного KGSL-сервера.
 - `zink Vulkan ... Turnip ...` означает Zink/Turnip; ожидаемо для собственного
   рендерера mango или явной диагностики.
 - `llvmpipe` означает программный резервный путь. Если рендерер самого mango —
   Zink/Turnip, а клиенты сессии показывают llvmpipe, установите приватный
   KGSL-стек через `./termux-compat/install-freedreno-kgsl.sh` и перезапустите
   сессию.
-- Проверка ускорения X11-клиента изнутри mango:
+- Если X-сервер `:1` падает с DRI3/DRM ioctl (`os_same_file_description` /
+  `XIO fatal IO error 25`), оставьте `MANGO_XWAYLAND_GLAMOR=0` и перезапустите
+  сессию, чтобы использовалась стабильная обёртка
+  `$PREFIX/tmp/mango-xwayland` без glamor (`XWAYLAND_NO_GLAMOR=1`,
+  `LIBGL_DRI3_DISABLE=1`, `+iglx -shm`). `LIBGL_DRI3_DISABLE` — клиентская
+  подсказка Mesa; сервер без glamor и аргументы `+iglx -shm` также обязательны.
+- Проверка X11-клиента изнутри mango после подтверждения дисплея:
 
 ```sh
-DISPLAY=:1 glxinfo -B | grep -E 'Accelerated|OpenGL renderer'
+echo "$DISPLAY"
+glxinfo -b | grep -E 'direct rendering|OpenGL renderer'
+glinfo -b | grep -E 'direct rendering|OpenGL renderer'
 ```
+
+- `glxinfo -b` и bionic `glinfo -b` не должны ронять X-сервер. Результат glibc
+  `glinfo`/`glxinfo` об отсутствии RGB GLX visual ожидаем, поскольку glibc Mesa
+  24 не поддерживает KGSL; это не доказательство падения Xwayland.
 
 - Проверка Freedreno Vulkan ICD:
 
@@ -1065,7 +1132,18 @@ DISPLAY=:0 mango-x11-check; echo $?
 - X11-приложения открываются на внешнем рабочем столе Termux:X11: они
   унаследовали `DISPLAY=:0`. Запускайте их из терминала внутри mango или
   используйте `mango-termux -s <app>`; пересоберите текущим скриптом, чтобы
-  Xwayland был включён для существующих каталогов сборки.
+  Xwayland был включён для существующих каталогов сборки. Вложенный Xwayland
+  обычно `:1`, если внешний Termux:X11 — `:0`; проверяйте `echo $DISPLAY`.
+  Внутри mango унаследованный `DISPLAY` указывает на вложенный Xwayland.
+- Падение X-сервера `:1` с `os_same_file_description` / `XIO fatal IO error 25`:
+  это сбой DRI3/DRM ioctl, которого избегает стабильная обёртка. Проверьте
+  `echo "$DISPLAY"`, оставьте `MANGO_XWAYLAND_GLAMOR=0` и перезапустите
+  `mango-termux`, чтобы `$PREFIX/tmp/mango-xwayland` был создан заново
+  (`XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1`, `+iglx -shm`).
+- `glxinfo`/`glinfo` сообщает об отсутствии RGB GLX visual: используйте
+  `glxinfo -b` или bionic `glinfo -b`, чтобы убедиться, что сервер жив; glibc
+  Mesa 24 не поддерживает KGSL, поэтому glibc GLX visual может отсутствовать
+  даже при здоровом Xwayland.
 - Чёрный/пустой экран: убедитесь, что приложение Termux:X11 открыто; запустите
   `mango-termux -d` и изучите лог.
 - Медленный рендеринг: уменьшите разрешение Termux:X11, отключите
@@ -1074,8 +1152,12 @@ DISPLAY=:0 mango-x11-check; echo $?
 - `couldn't create renderer`: убедитесь, что scenefx собран с
   `scenefx-termux.patch`, установлен в `$PREFIX`, а launcher использует
   ожидаемый бинарник.
-- `error: no usable rootfs found`: установите Arch rootfs с
-  `usr/bin/noctalia` либо задайте `NOCTALIA_ROOTFS`; `mango-noctalia` ищет
+- `error: no usable rootfs found`: `./install-noctalia-termux.sh` без флагов
+  автоматически запускает bootstrap (`proot-distro install archlinuxarm` +
+  `pacman`), если есть сеть и `proot-distro`; `--no-bootstrap` отключает это и
+  завершается ошибкой, а `--check` только читает. Явный непригодный
+  `NOCTALIA_ROOTFS`/`--rootfs` не bootstrap-ится; задайте корректный путь или
+  установите Arch rootfs с `usr/bin/noctalia`. `mango-noctalia` ищет
   `installed-rootfs/*` и `containers/*/rootfs`.
 - `error: patchelf is required to prepare the native Noctalia binary`: выполните
   `pkg install patchelf` и повторите `mango-noctalia` или `mango-integrate`.

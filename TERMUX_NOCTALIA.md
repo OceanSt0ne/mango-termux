@@ -185,6 +185,16 @@ or warming caches:
 ./install-noctalia-termux.sh --check
 ```
 
+With no flags, the installer uses a discovered rootfs; if none is usable it
+automatically runs the bootstrap path: `proot-distro install archlinuxarm`,
+then `pacman -Syu` and `pacman -S --needed noctalia`. This requires network
+access and `proot-distro`. `--no-bootstrap` disables the automatic bootstrap
+and fails instead. An explicit `--rootfs PATH` or `NOCTALIA_ROOTFS` is still
+fail-fast: an unusable requested tree exits without bootstrapping. `--check` is
+read-only and never bootstraps, and `--bootstrap-rootfs` remains available as
+an explicit opt-in. When an archlinuxarm rootfs already exists, the bootstrap
+path repairs it by re-running pacman instead of reinstalling the rootfs.
+
 Run the installer with the detected rootfs:
 
 ```sh
@@ -198,9 +208,9 @@ runtime and replace the launchers:
 ./install-noctalia-termux.sh --rootfs /path/to/rootfs --force
 ```
 
-If no usable rootfs exists, `--bootstrap-rootfs` installs Arch Linux ARM and
-Noctalia with `proot-distro`; `proot-distro` is used only for that setup step,
-never at runtime:
+`--bootstrap-rootfs` is the explicit form of the same setup step: it installs
+Arch Linux ARM and Noctalia with `proot-distro` when no usable rootfs exists.
+`proot-distro` is used only for setup and package repair, never at runtime:
 
 ```sh
 ./install-noctalia-termux.sh --bootstrap-rootfs
@@ -355,6 +365,10 @@ process, the binary has no Qt `NEEDED` libraries, and it has no Vulkan `NEEDED`
 libraries. The launcher therefore starts one process, `noctalia` (or
 `noctalia-native` in fallback mode), not a QML runtime tree.
 
+Noctalia is a Wayland client of the nested MangoWM compositor, so this launcher
+does not start or configure Xwayland. X11 applications in the same session use
+the session Xwayland server described in section 3.3.
+
 ### 3.3 Runtime environment
 
 The launcher executes the direct rootfs binary with a controlled environment.
@@ -390,6 +404,19 @@ Native children inherit `HOME`, `PREFIX`,
 `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` with a
 bash fallback, and native XDG config, state, and data paths. Bionic Termux
 children ignore the glibc EGL variables and do not need a Vulkan ICD.
+
+Nested Xwayland is a session concern, not a Noctalia launcher concern.
+`run-mango.sh` now defaults to the stable no-glamor wrapper at
+`$PREFIX/tmp/mango-xwayland`, which exports `XWAYLAND_NO_GLAMOR=1` and
+`LIBGL_DRI3_DISABLE=1` and starts the server with the arguments `+iglx -shm`.
+This prevents DRI3/DRM ioctl failures (`os_same_file_description` /
+`XIO fatal IO error 25`) from killing `:1`. Set `MANGO_XWAYLAND_GLAMOR=1` to
+opt back into the DRI3/glamor KGSL wrapper for hardware GLX, accepting that
+those crashes may return. Nested Xwayland is normally `:1` when the outer
+Termux:X11 display is `:0`; use `echo "$DISPLAY"` rather than hardcoding the
+number. `glxinfo -b` and bionic `glinfo -b` must not abort the X server; glibc
+`glinfo`/`glxinfo` may report no RGB GLX visual because glibc Mesa 24 lacks
+KGSL. `LIBGL_DRI3_DISABLE` is a client-side Mesa hint, not the only switch.
 
 ## 4. Graphics and resources
 
@@ -681,6 +708,15 @@ request, and no `/root/Walls` warning. A Freedreno renderer indicates the rootfs
 Mesa/KGSL path; `llvmpipe` indicates the software fallback described in section
 9.6.
 
+Verify nested Xwayland separately with `echo "$DISPLAY"`, `glxinfo -b`, and
+bionic `glinfo -b` from a terminal inside the session. Neither command should
+abort the X server. A glibc `glinfo`/`glxinfo` result with no RGB GLX visual is
+expected because glibc Mesa 24 lacks KGSL; it is not an Xwayland failure. Under
+the default no-glamor wrapper, X11 clients do not receive DRI3 or native KGSL;
+`MANGO_XWAYLAND_GLAMOR=1` opts into the DRI3/glamor KGSL server for hardware
+GLX, with the risk of `os_same_file_description` / `XIO fatal IO error 25`
+crashes.
+
 ### 7.3 IPC and workspaces
 
 With the session running, exercise the native IPC path:
@@ -870,6 +906,18 @@ the private EGL manifest. If `/dev/kgsl-3d0` is unavailable or the rootfs lacks
 and persistent shader caches keep it usable. A black surface with llvmpipe in
 the log points at a compositor or surface issue rather than a forced driver.
 
+If `:1` disappears with `os_same_file_description` or
+`XIO fatal IO error 25`, the patched DRI3/glamor Xwayland server hit a DRI3/DRM
+ioctl failure. Keep `MANGO_XWAYLAND_GLAMOR=0` (the default) so `run-mango.sh`
+uses `$PREFIX/tmp/mango-xwayland` with `XWAYLAND_NO_GLAMOR=1`,
+`LIBGL_DRI3_DISABLE=1`, and the arguments `+iglx -shm`, then restart
+`mango-termux` so the wrapper is regenerated. Check `echo "$DISPLAY"`; nested
+Xwayland is normally `:1` when the outer Termux:X11 display is `:0`, but do not
+hardcode it. `glxinfo -b` and bionic `glinfo -b` must not abort the server;
+glibc `glinfo`/`glxinfo` may report no RGB GLX visual because glibc Mesa 24
+lacks KGSL. `LIBGL_DRI3_DISABLE` is a client-side Mesa hint, not the only
+switch.
+
 ### 9.7 Native applications do not appear
 
 Check that the native applications are installed in Termux:
@@ -883,6 +931,13 @@ Noctalia finds desktop entries through
 cannot appear in the launcher. If the applications exist but their entries are
 missing, run `mango-integrate`; it restores terminal entries and the Firefox
 launcher.
+
+X11 applications also depend on the nested Xwayland server. If they do not
+appear or open outside mango, confirm `echo "$DISPLAY"` and that the nested
+server is alive with `glxinfo -b` or bionic `glinfo -b`. The default no-glamor
+wrapper keeps `:1` stable with `XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1`,
+and `+iglx -shm`; `MANGO_XWAYLAND_GLAMOR=1` may reintroduce DRI3 crashes. Launch
+X11 applications from inside mango or with `mango-termux -s`.
 
 ### 9.8 Manual repair
 
@@ -952,7 +1007,8 @@ this list are the effective values after the installer-generated launcher
 applies its environment.
 
 - `NOCTALIA_ROOTFS` — install-time rootfs override, recorded in `runtime.env`.
-  The launcher does not search; re-run the installer to change it.
+  The launcher does not search; re-run the installer to change it. An unusable
+  explicit override fails instead of triggering an automatic bootstrap.
 - `NOCTALIA_LOADER`, `NOCTALIA_RPATH`, and `NOCTALIA_NATIVE_BIN` — constants
   recorded by the installer. The launcher does not rediscover or relink them.
 - `NOCTALIA_HAS_QT` — `0` for the current binary; `1` only when the installer
@@ -968,7 +1024,17 @@ applies its environment.
 - `TMPDIR` — `$PREFIX/tmp`.
 - `XDG_RUNTIME_DIR` — `$PREFIX/tmp`.
 - `WAYLAND_DISPLAY` — `wayland-0` by default.
-- `DISPLAY` — `:0` by default for nested Xwayland children.
+- `DISPLAY` — the outer Termux:X11 display is `:0` by default; nested Xwayland
+  is normally `:1`. Use `echo "$DISPLAY"` rather than hardcoding the number.
+- `MANGO_XWAYLAND_GLAMOR` — `0` by default, selecting the stable no-glamor
+  Xwayland wrapper at `$PREFIX/tmp/mango-xwayland`; set to `1` to opt into the
+  DRI3/glamor KGSL server for hardware GLX (may reintroduce crashes).
+- `XWAYLAND_NO_GLAMOR` — `1` in the default wrapper; disables Xwayland glamor.
+- `LIBGL_DRI3_DISABLE` — `1` in the default wrapper; client-side Mesa hint that
+  disables DRI3. It is not the only switch; the no-glamor server and the
+  `+iglx -shm` arguments also matter.
+- `WLR_XWAYLAND` — overrides the Xwayland server path and the source used by the
+  generated wrapper.
 - `XDG_CONFIG_HOME` — `$HOME/.config`.
 - `XDG_STATE_HOME` — `$HOME/.local/state`.
 - `XDG_DATA_HOME` — `$HOME/.local/share`.
