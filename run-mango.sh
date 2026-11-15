@@ -292,6 +292,8 @@ backend="${MANGO_BACKEND:-x11}"
 export WLR_BACKENDS="${WLR_BACKENDS:-$backend}"
 
 # Refresh Termux integration helpers non-fatally before touching the session.
+# mango-integrate also installs/migrates the native Noctalia launcher; Noctalia
+# runs directly in Termux and never needs proot or a host bridge.
 integrate=""
 if [[ -x "$prefix/bin/mango-integrate" ]]; then
   integrate="$prefix/bin/mango-integrate"
@@ -299,6 +301,9 @@ elif [[ -x "$script_dir/termux-compat/mango-integrate" ]]; then
   integrate="$script_dir/termux-compat/mango-integrate"
 fi
 if [[ -n "$integrate" ]]; then
+  if [[ -x "$prefix/bin/mango-noctalia" ]]; then
+    echo "Refreshing Termux integrations (native Noctalia, no proot) ..." >&2
+  fi
   if ! "$integrate" --quiet; then
     echo "warning: $integrate failed; continuing with existing integration." >&2
   fi

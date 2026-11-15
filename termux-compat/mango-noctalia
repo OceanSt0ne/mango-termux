@@ -1,0 +1,163 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+
+PREFIX=/data/data/com.termux/files/usr
+HOME=/data/data/com.termux/files/home
+TMPDIR=$PREFIX/tmp
+XDG_RUNTIME_DIR=$PREFIX/tmp
+PATH=$PREFIX/bin:/system/bin:/system/xbin
+SHELL=$PREFIX/bin/fish
+[[ -x $SHELL ]] || SHELL=$PREFIX/bin/bash
+
+clear_foreign_env() {
+	unset LD_LIBRARY_PATH LD_PRELOAD LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH \
+		MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER VK_DRIVER_FILES \
+		VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_FILENAMES FD_KGSL_DMABUF \
+		EGL_PLATFORM
+	local name
+	while IFS= read -r name; do
+		unset "$name"
+	done < <(compgen -v PROOT_ || true)
+}
+
+clear_foreign_env
+
+requested_rootfs=${NOCTALIA_ROOTFS:-}
+
+if [[ -n $requested_rootfs ]]; then
+	rootfs=${requested_rootfs%/}
+	if [[ ! -x $rootfs/usr/bin/noctalia || ! -e $rootfs/lib/ld-linux-aarch64.so.1 ]]; then
+		echo "error: NOCTALIA_ROOTFS=$requested_rootfs lacks usr/bin/noctalia or lib/ld-linux-aarch64.so.1" >&2
+		exit 1
+	fi
+else
+	rootfs=
+	for candidate in "$PREFIX"/var/lib/proot-distro/installed-rootfs/* \
+		"$PREFIX"/var/lib/proot-distro/containers/*/rootfs; do
+		[[ -d $candidate ]] || continue
+		if [[ -x $candidate/usr/bin/noctalia && -e $candidate/lib/ld-linux-aarch64.so.1 ]]; then
+			rootfs=$candidate
+			break
+		fi
+	done
+	if [[ -z $rootfs ]]; then
+		echo "error: no usable rootfs found; need usr/bin/noctalia and lib/ld-linux-aarch64.so.1" >&2
+		echo "  searched $PREFIX/var/lib/proot-distro/installed-rootfs/*" >&2
+		echo "  searched $PREFIX/var/lib/proot-distro/containers/*/rootfs" >&2
+		echo "  set NOCTALIA_ROOTFS to override" >&2
+		exit 1
+	fi
+fi
+
+loader=$PREFIX/glibc/lib/ld-linux-aarch64.so.1
+if [[ ! -e $loader ]]; then
+	echo "error: Termux glibc loader not found at $loader" >&2
+	exit 1
+fi
+
+libstdcpp=$rootfs/usr/lib/libstdc++.so.6
+if [[ ! -e $libstdcpp ]]; then
+	echo "error: rootfs libstdc++ not found at $libstdcpp" >&2
+	exit 1
+fi
+libstdcpp=$(readlink -f "$libstdcpp")
+
+native_dir=$PREFIX/libexec/mango-termux
+native_bin=$native_dir/noctalia-native
+native_stamp=$native_bin.rootfs
+
+ensure_native_binary() {
+	if ! command -v patchelf >/dev/null 2>&1; then
+		echo "error: patchelf is required to prepare the native Noctalia binary" >&2
+		echo "  pkg install patchelf" >&2
+		exit 1
+	fi
+	if [[ -x $native_bin && -f $native_stamp ]] &&
+		[[ $(<"$native_stamp") == "$rootfs" ]] &&
+		[[ $native_bin -nt $rootfs/usr/bin/noctalia ]] &&
+		[[ $native_bin -nt $libstdcpp ]] &&
+		[[ $native_bin -nt $loader ]]; then
+		return 0
+	fi
+	mkdir -p "$native_dir"
+	local tmp
+	tmp=$(mktemp "$native_dir/.noctalia-native.XXXXXX")
+	if ! cp "$rootfs/usr/bin/noctalia" "$tmp"; then
+		rm -f "$tmp"
+		echo "error: cannot copy $rootfs/usr/bin/noctalia" >&2
+		exit 1
+	fi
+	chmod 0755 "$tmp"
+	if ! patchelf --set-interpreter "$loader" --force-rpath \
+		--set-rpath "$PREFIX/glibc/lib:$rootfs/usr/lib:$rootfs/lib" "$tmp"; then
+		rm -f "$tmp"
+		echo "error: patchelf failed to prepare the native Noctalia binary" >&2
+		exit 1
+	fi
+	if ! patchelf --replace-needed libstdc++.so.6 "$libstdcpp" "$tmp"; then
+		rm -f "$tmp"
+		echo "error: patchelf failed to pin rootfs libstdc++" >&2
+		exit 1
+	fi
+	mv -f "$tmp" "$native_bin"
+	printf '%s\n' "$rootfs" >"$native_stamp"
+}
+
+ensure_native_binary
+
+session=$PREFIX/tmp/mango-session.env
+if [[ -f $session ]]; then
+	set -a
+	source "$session"
+	set +a
+fi
+
+export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH SHELL
+clear_foreign_env
+
+: "${WAYLAND_DISPLAY:=wayland-0}"
+: "${DISPLAY:=:0}"
+export WAYLAND_DISPLAY DISPLAY
+export XDG_CONFIG_HOME=$HOME/.config
+export XDG_STATE_HOME=$HOME/.local/state
+export XDG_DATA_HOME=$HOME/.local/share
+
+extend_paths() {
+	local out=$1 dir
+	local -a extra
+	IFS=: read -ra extra <<< "${2:-}"
+	for dir in ${extra[@]+"${extra[@]}"}; do
+		[[ -n $dir ]] || continue
+		case ":$out:" in
+			*":$dir:"*) continue ;;
+		esac
+		out=$out:$dir
+	done
+	printf '%s' "$out"
+}
+
+XDG_DATA_DIRS=$(extend_paths "$PREFIX/share:$rootfs/usr/share" "${XDG_DATA_DIRS:-}")
+XDG_CONFIG_DIRS=$(extend_paths "$PREFIX/etc/xdg:$rootfs/etc/xdg" "${XDG_CONFIG_DIRS:-}")
+export XDG_DATA_DIRS XDG_CONFIG_DIRS
+
+export NOCTALIA_ASSETS_DIR=$rootfs/usr/share/noctalia/assets
+if [[ -d $PREFIX/etc/fonts ]]; then
+	export FONTCONFIG_PATH=$PREFIX/etc/fonts
+fi
+
+if [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} && -z ${MANGO_NOCTALIA_DBUS_WRAPPED:-} ]]; then
+	if dbus_run=$(command -v dbus-run-session); then
+		self=${BASH_SOURCE[0]}
+		if [[ $self != /* ]]; then
+			if [[ $self == */* ]]; then
+				self=$PWD/$self
+			else
+				self=$(command -v -- "$self" || printf '%s' "$PWD/$self")
+			fi
+		fi
+		export MANGO_NOCTALIA_DBUS_WRAPPED=1
+		exec "$dbus_run" -- "$self" "$@"
+	fi
+fi
+
+exec "$native_bin" "$@"

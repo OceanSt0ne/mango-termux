@@ -5,7 +5,8 @@
 # The integrations are normally installed by the dedicated helpers under
 # termux-compat/. This script re-applies the parts that can change when a new
 # Termux package or .deb is installed later: Firefox and terminal .desktop
-# entries, the Firefox launcher, and safe default terminal shell configs.
+# entries, the Firefox launcher, native Noctalia, and safe default terminal
+# shell configs.
 #
 # Usage:
 #   ./termux-compat/mango-integrate [--quiet] [--check]
@@ -24,10 +25,11 @@ enable_terminals=1
 
 firefox_patched=0
 firefox_skipped=0
-terminal_patched=0
+terminal_restored=0
 terminal_skipped=0
 configs_created=0
 configs_skipped=0
+noctalia_rootfs=""
 
 usage() {
 	cat <<'EOF'
@@ -41,7 +43,7 @@ Options:
   --check         Verify wrappers and patched desktop entries; exit nonzero
                   if anything is missing. No files are modified.
   --no-firefox    Do not patch Firefox desktop entries or the launcher.
-  --no-terminals  Do not patch terminal desktop entries or write shell configs.
+  --no-terminals  Do not restore terminal desktop entries or write shell configs.
   -h, --help      Show this help.
 EOF
 }
@@ -109,12 +111,84 @@ is_firefox_entry() {
 	grep -qi 'firefox' "$1"
 }
 
-firefox_exec_match() {
-	grep -Eq '^Exec=[[:space:]]*([^[:space:]]*/)?(firefox|mango-firefox)([[:space:]]|$)' "$1"
-}
-
-direct_wrapper_match() {
-	grep -Eq "^Exec=[[:space:]]*[^[:space:]]*mango-(firefox|host-run)([[:space:]]|\$)" "$1"
+firefox_direct_status() {
+	awk -v wrapper="$prefix/bin/mango-firefox" '
+		function basename_of(path,    n, parts) {
+			n = split(path, parts, "/")
+			return parts[n]
+		}
+		function token_at(value, pos,    len, start) {
+			len = length(value)
+			while (pos <= len &&
+				(substr(value, pos, 1) == " " || substr(value, pos, 1) == "\t"))
+				pos++
+			if (pos > len) {
+				TOKEN = ""
+				TOKEN_START = pos
+				TOKEN_END = pos
+				return pos
+			}
+			start = pos
+			while (pos <= len &&
+				substr(value, pos, 1) != " " && substr(value, pos, 1) != "\t")
+				pos++
+			TOKEN = substr(value, start, pos - start)
+			TOKEN_START = start
+			TOKEN_END = pos
+			return pos
+		}
+		function parse_command(value,    pos, first) {
+			pos = token_at(value, 1)
+			if (TOKEN == "")
+				return ""
+			first = TOKEN
+			if (basename_of(first) == "env") {
+				while (1) {
+					pos = token_at(value, pos)
+					if (TOKEN == "")
+						return ""
+					if (TOKEN == "--") {
+						pos = token_at(value, pos)
+						if (TOKEN == "")
+							return ""
+						CMD_END = TOKEN_END
+						return TOKEN
+					}
+					if (substr(TOKEN, 1, 1) == "-") {
+						if (TOKEN == "-u" || TOKEN == "--unset") {
+							pos = token_at(value, pos)
+							if (TOKEN == "")
+								return ""
+						}
+						continue
+					}
+					CMD_END = TOKEN_END
+					return TOKEN
+				}
+			}
+			CMD_END = TOKEN_END
+			return first
+		}
+		BEGIN { saw = 0; bad = 0 }
+		index($0, "Exec=") == 1 {
+			value = substr($0, 6)
+			sub(/^[[:space:]]+/, "", value)
+			command = parse_command(value)
+			if (basename_of(command) == "firefox" ||
+				basename_of(command) == "mango-firefox") {
+				saw = 1
+				if (index(value, wrapper) != 1)
+					bad = 1
+			}
+		}
+		END {
+			if (bad)
+				exit 1
+			if (saw)
+				exit 0
+			exit 2
+		}
+	' "$1"
 }
 
 terminal_exec_match() {
@@ -173,20 +247,66 @@ patch_firefox_desktop() {
 			n = split(path, parts, "/")
 			return parts[n]
 		}
+		function token_at(value, pos,    len, start) {
+			len = length(value)
+			while (pos <= len &&
+				(substr(value, pos, 1) == " " || substr(value, pos, 1) == "\t"))
+				pos++
+			if (pos > len) {
+				TOKEN = ""
+				TOKEN_END = pos
+				return pos
+			}
+			start = pos
+			while (pos <= len &&
+				substr(value, pos, 1) != " " && substr(value, pos, 1) != "\t")
+				pos++
+			TOKEN = substr(value, start, pos - start)
+			TOKEN_END = pos
+			return pos
+		}
+		function parse_command(value,    pos, first) {
+			pos = token_at(value, 1)
+			if (TOKEN == "")
+				return ""
+			first = TOKEN
+			if (basename_of(first) == "env") {
+				while (1) {
+					pos = token_at(value, pos)
+					if (TOKEN == "")
+						return ""
+					if (TOKEN == "--") {
+						pos = token_at(value, pos)
+						if (TOKEN == "")
+							return ""
+						CMD_END = TOKEN_END
+						return TOKEN
+					}
+					if (substr(TOKEN, 1, 1) == "-") {
+						if (TOKEN == "-u" || TOKEN == "--unset") {
+							pos = token_at(value, pos)
+							if (TOKEN == "")
+								return ""
+						}
+						continue
+					}
+					CMD_END = TOKEN_END
+					return TOKEN
+				}
+			}
+			CMD_END = TOKEN_END
+			return first
+		}
 		{
 			if (index($0, "Exec=") == 1) {
 				value = substr($0, 6)
-				match(value, /^[[:space:]]*/)
-				rest = substr(value, RLENGTH + 1)
-				if (rest != "") {
-					split(rest, fields, /[[:space:]]+/)
-					token = fields[1]
-					base = basename_of(token)
-					if (base == "firefox" || base == "mango-firefox") {
-						tail = substr(rest, length(token) + 1)
-						print "Exec=/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH " prefix "/bin/mango-firefox" tail
-						next
-					}
+				sub(/^[[:space:]]+/, "", value)
+				command = parse_command(value)
+				base = basename_of(command)
+				if (base == "firefox" || base == "mango-firefox") {
+					tail = substr(value, CMD_END)
+					print "Exec=" prefix "/bin/mango-firefox" tail
+					next
 				}
 			}
 			print
@@ -221,47 +341,103 @@ patch_firefox_desktop() {
 	return 0
 }
 
-patch_terminal_desktop() {
+restore_terminal_desktop() {
 	local file="$1"
+	local backup="$file.mango-bak"
+	local tmp
 
-	local fallback=0
-	if ! terminal_exec_match "$file"; then
-		fallback=1
+	if [[ -e "$backup" || -L "$backup" ]] &&
+		! grep -q 'mango-host-run' "$backup"; then
+		tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+			warn "cannot create temporary file for: $file"
+			return 0
+		}
+		if ! cp "$backup" "$tmp" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot restore: $file"
+			return 0
+		fi
+		set_mode_from "$backup" "$tmp"
+		if ! mv "$tmp" "$file" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot replace: $file"
+			return 0
+		fi
+		info "restored terminal: $file"
+		terminal_restored=$((terminal_restored + 1))
+		return 0
 	fi
 
-	local tmp
 	tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
 		warn "cannot create temporary file for: $file"
 		return 0
 	}
-	if ! awk -v prefix="$prefix" -v fallback="$fallback" '
+	if ! awk -v prefix="$prefix" '
 		function basename_of(path,    n, parts) {
 			n = split(path, parts, "/")
 			return parts[n]
 		}
+		function token_at(value, pos,    len, start) {
+			len = length(value)
+			while (pos <= len &&
+				(substr(value, pos, 1) == " " || substr(value, pos, 1) == "\t"))
+				pos++
+			if (pos > len) {
+				TOKEN = ""
+				TOKEN_START = pos
+				TOKEN_END = pos
+				return pos
+			}
+			start = pos
+			while (pos <= len &&
+				substr(value, pos, 1) != " " && substr(value, pos, 1) != "\t")
+				pos++
+			TOKEN = substr(value, start, pos - start)
+			TOKEN_START = start
+			TOKEN_END = pos
+			return pos
+		}
+		function parse_command(value,    pos, first) {
+			pos = token_at(value, 1)
+			if (TOKEN == "")
+				return ""
+			first = TOKEN
+			if (basename_of(first) == "env") {
+				while (1) {
+					pos = token_at(value, pos)
+					if (TOKEN == "")
+						return ""
+					if (TOKEN == "--") {
+						pos = token_at(value, pos)
+						if (TOKEN == "")
+							return ""
+						CMD_END = TOKEN_END
+						return TOKEN
+					}
+					if (substr(TOKEN, 1, 1) == "-") {
+						if (TOKEN == "-u" || TOKEN == "--unset") {
+							pos = token_at(value, pos)
+							if (TOKEN == "")
+								return ""
+						}
+						continue
+					}
+					CMD_END = TOKEN_END
+					return TOKEN
+				}
+			}
+			CMD_END = TOKEN_END
+			return first
+		}
 		{
 			if (index($0, "Exec=") == 1) {
 				value = substr($0, 6)
-				match(value, /^[[:space:]]*/)
-				rest = substr(value, RLENGTH + 1)
-				if (rest != "") {
-					split(rest, fields, /[[:space:]]+/)
-					token = fields[1]
-					base = basename_of(token)
-					ok = (base == "kitty" || base == "kitty-open" ||
-						base == "foot" || base == "footclient" ||
-						base == "foot-server" || base == "ghostty")
-					direct = (base == "mango-host-run")
-					if (ok || direct || fallback == 1) {
-						tail = substr(rest, length(token) + 1)
-						target = token
-						if (direct) {
-							target = prefix "/bin/mango-host-run"
-							tail = substr(rest, length(token) + 1)
-							print "Exec=/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH " target tail
-						} else {
-							print "Exec=/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH " prefix "/bin/mango-host-run " token tail
-						}
+				sub(/^[[:space:]]+/, "", value)
+				command = parse_command(value)
+				if (basename_of(command) == "mango-host-run") {
+					token_at(value, CMD_END)
+					if (TOKEN != "") {
+						print "Exec=" substr(value, TOKEN_START)
 						next
 					}
 				}
@@ -276,7 +452,7 @@ patch_terminal_desktop() {
 
 	if cmp -s "$file" "$tmp"; then
 		rm -f "$tmp"
-		info "no terminal Exec: $file"
+		info "no terminal overlay: $file"
 		terminal_skipped=$((terminal_skipped + 1))
 		return 0
 	fi
@@ -293,8 +469,8 @@ patch_terminal_desktop() {
 		return 0
 	fi
 
-	info "patched terminal: $file"
-	terminal_patched=$((terminal_patched + 1))
+	info "restored terminal: $file"
+	terminal_restored=$((terminal_restored + 1))
 	return 0
 }
 
@@ -344,6 +520,180 @@ ensure_firefox_launcher() {
 	return 0
 }
 
+find_noctalia_rootfs() {
+	local base="$prefix/var/lib/proot-distro"
+	local candidate
+	for candidate in "$base"/installed-rootfs/* "$base"/containers/*/rootfs; do
+		[[ -e "$candidate/usr/bin/noctalia" ]] || continue
+		printf '%s\n' "$candidate"
+		return 0
+	done
+	return 1
+}
+
+install_native_noctalia() {
+	[[ -n "$noctalia_rootfs" ]] || return 0
+
+	local src="$bin/mango-noctalia"
+	local dst="$bin/noctalia"
+	local backup="$dst.proot-bak"
+	local tmp
+
+	if [[ ! -x "$src" ]]; then
+		info "native Noctalia launcher source is unavailable: $src"
+		return 0
+	fi
+
+	if [[ ! -L "$dst" && -f "$dst" ]] && cmp -s "$src" "$dst"; then
+		info "native Noctalia launcher already installed: $dst"
+		return 0
+	fi
+
+	if [[ -e "$dst" || -L "$dst" ]] &&
+		[[ ! -e "$backup" && ! -L "$backup" ]]; then
+		if ! cp -a "$dst" "$backup" 2>/dev/null; then
+			warn "cannot back up Noctalia proxy: $dst"
+		fi
+	fi
+
+	tmp="$(mktemp "${dst}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $dst"
+		return 0
+	}
+	if ! cp -a "$src" "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot copy native Noctalia launcher: $src"
+		return 0
+	fi
+	if ! chmod 0755 "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot set mode on native Noctalia launcher: $tmp"
+		return 0
+	fi
+	if ! mv "$tmp" "$dst" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace Noctalia launcher: $dst"
+		return 0
+	fi
+
+	info "installed native Noctalia launcher: $dst"
+	return 0
+}
+
+migrate_native_noctalia() {
+	[[ -n "$noctalia_rootfs" ]] || return 0
+
+	local rel src dst
+	for rel in .config/noctalia .local/state/noctalia .local/share/noctalia; do
+		src="$noctalia_rootfs/root/$rel"
+		dst="$home/$rel"
+		[[ -e "$src" || -L "$src" ]] || continue
+		if [[ -e "$dst" || -L "$dst" ]]; then
+			info "native Noctalia path exists, not overwriting: $dst"
+			continue
+		fi
+		if ! mkdir -p "${dst%/*}" 2>/dev/null; then
+			warn "cannot create Noctalia directory: ${dst%/*}"
+			continue
+		fi
+		if ! mv "$src" "$dst" 2>/dev/null; then
+			warn "cannot migrate Noctalia path: $src"
+			continue
+		fi
+		info "migrated Noctalia path: $dst"
+	done
+}
+
+patch_mics_config() {
+	local file="$home/.config/mango/mics.conf"
+	local tmp
+
+	[[ -f "$file" ]] || return 0
+	grep -q 'start-noctalia\.sh' "$file" || return 0
+
+	tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $file"
+		return 0
+	}
+	if ! awk '
+		/^[[:space:]]*exec[[:space:]]*=[[:space:]]*.*start-noctalia\.sh/ {
+			print "exec=noctalia"
+			next
+		}
+		{ print }
+	' "$file" >"$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot rewrite: $file"
+		return 0
+	fi
+
+	if cmp -s "$file" "$tmp"; then
+		rm -f "$tmp"
+		return 0
+	fi
+
+	if ! backup_once "$file"; then
+		rm -f "$tmp"
+		return 0
+	fi
+
+	set_mode_from "$file" "$tmp"
+	if ! mv "$tmp" "$file" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace: $file"
+		return 0
+	fi
+
+	info "patched Noctalia exec: $file"
+	return 0
+}
+
+patch_start_noctalia_shim() {
+	local file="$home/.config/mango/start-noctalia.sh"
+	local tmp
+
+	[[ -f "$file" ]] || return 0
+	grep -q 'proot-distro' "$file" || return 0
+
+	tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $file"
+		return 0
+	}
+	{
+		printf '#!%s/bin/bash\n' "$prefix"
+		printf '%s\n' '# Native Noctalia launcher; Noctalia runs directly in Termux.'
+		printf 'exec "%s/bin/noctalia" "$@"\n' "$prefix"
+	} >"$tmp" 2>/dev/null || {
+		rm -f "$tmp"
+		warn "cannot write native Noctalia shim: $tmp"
+		return 0
+	}
+
+	if cmp -s "$file" "$tmp"; then
+		rm -f "$tmp"
+		return 0
+	fi
+
+	if ! backup_once "$file"; then
+		rm -f "$tmp"
+		return 0
+	fi
+
+	if ! chmod 0755 "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot set mode on Noctalia shim: $tmp"
+		return 0
+	fi
+	if ! mv "$tmp" "$file" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace: $file"
+		return 0
+	fi
+
+	info "rewrote native Noctalia shim: $file"
+	return 0
+}
+
 create_config_file() {
 	local path="$1"
 	local content="$2"
@@ -380,19 +730,33 @@ create_terminal_configs() {
 	create_config_file "$config/ghostty/config.ghostty" "command = $shell"$'\n'
 }
 
+remove_legacy_host_bridge() {
+	if [[ -e "$bin/mango-host-run" ]]; then
+		rm -f "$bin/mango-host-run" &&
+			info "removed legacy host bridge: $bin/mango-host-run"
+	fi
+}
+
+required_wrappers() {
+	printf '%s\n' mango-firefox mango-gpu-run
+	if [[ -n "$noctalia_rootfs" ]]; then
+		printf '%s\n' mango-noctalia
+	fi
+}
+
 warn_missing_wrappers() {
 	local wrapper
-	for wrapper in mango-host-run mango-firefox mango-gpu-run; do
+	while IFS= read -r wrapper; do
 		if [[ ! -x "$bin/$wrapper" ]]; then
 			warn "wrapper is missing or not executable: $bin/$wrapper"
 		fi
-	done
+	done < <(required_wrappers)
 }
 
 run_check() {
 	local failed=0
 	local wrapper
-	for wrapper in mango-host-run mango-firefox mango-gpu-run; do
+	while IFS= read -r wrapper; do
 		if [[ -x "$bin/$wrapper" ]]; then
 			info "OK: wrapper: $bin/$wrapper"
 		else
@@ -400,29 +764,39 @@ run_check() {
 				"$bin/$wrapper" >&2
 			failed=1
 		fi
-	done
+	done < <(required_wrappers)
+
+	if [[ -n "$noctalia_rootfs" ]] && [[ -x "$bin/mango-noctalia" ]]; then
+		if [[ ! -L "$bin/noctalia" && -f "$bin/noctalia" ]] &&
+			cmp -s "$bin/mango-noctalia" "$bin/noctalia"; then
+			info "OK: native Noctalia launcher: $bin/noctalia"
+		else
+			printf 'FAIL: native Noctalia launcher is not installed: %s\n' \
+				"$bin/noctalia" >&2
+			failed=1
+		fi
+	fi
 
 	if ((enable_firefox)); then
 		local -A seen=()
-		local file
+		local file rc
 		while IFS= read -r -d '' file; do
 			[[ -n "$file" ]] || continue
 			[[ -f "$file" ]] || continue
 			[[ -z "${seen[$file]+x}" ]] || continue
 			seen[$file]=1
 			is_firefox_entry "$file" || continue
-			if direct_wrapper_match "$file"; then
-				printf 'FAIL: firefox entry lacks env sanitizer: %s\n' \
-					"$file" >&2
-				failed=1
-			elif grep -q 'mango-firefox' "$file"; then
+			if firefox_direct_status "$file"; then
 				info "OK: firefox entry: $file"
-			elif ! firefox_exec_match "$file"; then
-				info "OK: no firefox Exec: $file"
 			else
-				printf 'FAIL: firefox entry is not patched: %s\n' \
-					"$file" >&2
-				failed=1
+				rc=$?
+				if ((rc == 2)); then
+					info "OK: no firefox Exec: $file"
+				else
+					printf 'FAIL: firefox entry is not a direct wrapper: %s\n' \
+						"$file" >&2
+					failed=1
+				fi
 			fi
 		done < <(discover_desktop_entries)
 
@@ -447,20 +821,12 @@ run_check() {
 			[[ -z "${seen[$file]+x}" ]] || continue
 			seen[$file]=1
 			is_terminal_entry "$file" || continue
-			if direct_wrapper_match "$file"; then
-				printf 'FAIL: terminal entry lacks env sanitizer: %s\n' \
-					"$file" >&2
-				failed=1
-			elif grep -q 'mango-host-run' "$file"; then
-				info "OK: terminal entry: $file"
-			elif ! grep -q '^Exec=' "$file"; then
-				info "OK: no Exec: $file"
-			elif terminal_exec_match "$file"; then
-				printf 'FAIL: terminal entry is not patched: %s\n' \
+			if grep -q 'mango-host-run' "$file"; then
+				printf 'FAIL: terminal entry still uses the host bridge: %s\n' \
 					"$file" >&2
 				failed=1
 			else
-				info "OK: no terminal Exec: $file"
+				info "OK: terminal entry: $file"
 			fi
 		done < <(discover_desktop_entries)
 	fi
@@ -473,6 +839,8 @@ run_check() {
 	info "mango-integrate: check passed"
 	return 0
 }
+
+noctalia_rootfs="$(find_noctalia_rootfs 2>/dev/null || true)"
 
 if ((check_only)); then
 	run_check
@@ -503,10 +871,17 @@ if ((enable_terminals)); then
 		[[ -z "${terminal_seen[$file]+x}" ]] || continue
 		terminal_seen[$file]=1
 		is_terminal_entry "$file" || continue
-		patch_terminal_desktop "$file"
+		grep -q 'mango-host-run' "$file" || continue
+		restore_terminal_desktop "$file"
 	done < <(discover_desktop_entries)
 
 	create_terminal_configs
 fi
 
-info "mango-integrate: firefox=${firefox_patched} patched/${firefox_skipped} skipped; terminals=${terminal_patched} patched/${terminal_skipped} skipped; configs=${configs_created} created/${configs_skipped} skipped"
+remove_legacy_host_bridge
+install_native_noctalia
+migrate_native_noctalia
+patch_mics_config
+patch_start_noctalia_shim
+
+info "mango-integrate: firefox=${firefox_patched} patched/${firefox_skipped} skipped; terminals=${terminal_restored} restored/${terminal_skipped} skipped; configs=${configs_created} created/${configs_skipped} skipped"

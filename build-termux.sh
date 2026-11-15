@@ -14,7 +14,6 @@
 #   MANGO_SKIP_KGSL 1 = do not install the private Freedreno/KGSL Mesa 27 stack
 #   MANGO_SKIP_INTEGRATIONS 1 = do not run mango-integrate after installation
 #   MANGO_SKIP_FIREFOX_FIX 1 = do not install the Firefox WebGL wrapper
-#   MANGO_SKIP_NOCTALIA_BRIDGE 1 = do not install the Noctalia host bridge
 set -euo pipefail
 
 # Resolve our own path so the script works from any cwd and through symlinks.
@@ -199,9 +198,6 @@ if [[ "${MANGO_SKIP_INTEGRATIONS:-0}" != "1" ]]; then
   if [[ "${MANGO_SKIP_FIREFOX_FIX:-0}" == "1" ]]; then
     integrate_args+=(--no-firefox)
   fi
-  if [[ "${MANGO_SKIP_NOCTALIA_BRIDGE:-0}" == "1" ]]; then
-    integrate_args+=(--no-terminals)
-  fi
   if ! "$PREFIX/bin/mango-integrate" "${integrate_args[@]}"; then
     echo "warning: mango integrations were not applied." >&2
     echo "  Run manually: $PREFIX/bin/mango-integrate ${integrate_args[*]}" >&2
@@ -209,6 +205,7 @@ if [[ "${MANGO_SKIP_INTEGRATIONS:-0}" != "1" ]]; then
 fi
 
 echo
+echo "Noctalia runs natively in Termux without proot; its binary is loaded from the existing rootfs."
 echo "Done. Start mango with:"
 echo "  mango-termux"
 echo "or:"

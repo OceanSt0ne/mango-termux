@@ -2,6 +2,10 @@
 
 # Noctalia в Termux + mango (Arch Linux ARM proot)
 
+> **Устаревшее руководство:** mango-termux теперь запускает Noctalia нативно в
+> Termux без proot; см. основной README. Этот документ сохранён только для
+> отладки старого proot-режима и ручных операций с rootfs.
+
 Проверенная связка:
 
 ```text
