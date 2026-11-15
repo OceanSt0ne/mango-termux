@@ -74,8 +74,8 @@ in sections 2 and 10.
 The resulting session provides:
 
 - native execution of the Noctalia ELF with the Termux glibc loader;
-- private rootfs Mesa 27, EGL, Vulkan, and DRI paths without global
-  `libxml2.so.2` links;
+- private rootfs Mesa 27, EGL, and DRI paths without global
+  `libxml2.so.2` links; a private Vulkan ICD is installed but not exported;
 - native MangoWM IPC through `MANGO_INSTANCE_SIGNATURE`, so the workspace
   backend is `mango-ipc`;
 - layer-shell panels and bars without extra MangoWM configuration;
@@ -134,19 +134,23 @@ The Arch Linux ARM rootfs supplies several files at runtime:
   validation but is not executed directly;
 - `usr/lib/libstdc++.so.6` — the C++ runtime pinned into the native copy.
 
-The launcher auto-detects a rootfs under
+Discovery happens once, at install time, not on every launch. The installer
+searches a rootfs under
 `$PREFIX/var/lib/proot-distro/installed-rootfs/*` and
-`$PREFIX/var/lib/proot-distro/containers/*/rootfs`. Set `NOCTALIA_ROOTFS` to
-override discovery. For the rest of this guide, `ROOTFS` denotes the selected
-tree:
+`$PREFIX/var/lib/proot-distro/containers/*/rootfs`, then records the selected
+tree in `$PREFIX/libexec/mango-termux/runtime.env`. Set `NOCTALIA_ROOTFS` to
+choose a tree when running the installer. For the rest of this guide, `ROOTFS`
+denotes the installed selection:
 
 ```sh
 ROOTFS="${NOCTALIA_ROOTFS:-$PREFIX/var/lib/proot-distro/containers/archlinuxarm/rootfs}"
 ls -l "$ROOTFS/usr/bin/noctalia"
 ```
 
-The launcher validates `usr/bin/noctalia`, `lib/ld-linux-aarch64.so.1`, and
-`usr/lib/libstdc++.so.6` before it prepares anything. The rootfs loader is
+The installer validates `usr/bin/noctalia`, `lib/ld-linux-aarch64.so.1`, and
+`usr/lib/libstdc++.so.6` before it writes anything. At launch the thin wrapper
+only confirms the embedded paths exist and executes them; it does not
+rediscover the rootfs, scan libraries, or recreate links. The rootfs loader is
 never used as the process interpreter; section 3.2 explains why.
 
 ### 1.3 Native tools
@@ -170,11 +174,12 @@ under `dbus-run-session`.
 
 The repository root contains the executable `install-noctalia-termux.sh`, which
 performs the installation described in this guide. It discovers the rootfs
-automatically, preferring `--rootfs`, then `NOCTALIA_ROOTFS`, then the
+once, at install time, preferring `--rootfs`, then `NOCTALIA_ROOTFS`, then the
 `proot-distro` layouts. It checks `patchelf`; `proot-distro`, `curl`, and `wget`
 are optional except when bootstrapping. Its default launch path uses the direct
 rootfs loader through the Termux glibc loader; it never starts `proot` or
-`proot-distro` at runtime. Validate an existing setup without changing any file:
+`proot-distro` at runtime. Validate an existing setup without changing any file
+or warming caches:
 
 ```sh
 ./install-noctalia-termux.sh --check
@@ -201,19 +206,28 @@ never at runtime:
 ./install-noctalia-termux.sh --bootstrap-rootfs
 ```
 
-The installer creates the private Mesa 27, EGL, Vulkan, and libxml2
-compatibility files under `$PREFIX/libexec/mango-termux`; it never creates a
-global `libxml2.so.2`. It writes `$PREFIX/bin/noctalia` and
-`$PREFIX/bin/mango-noctalia` identically so `mango-integrate --check` passes,
-and backs up an old proxy as `$PREFIX/bin/noctalia.proot-bak`. It migrates
-configs, state, and wallpapers, rewrites `/root/` paths, updates `mics.conf`, and
-replaces an old `start-noctalia.sh` with a native shim. QML and Qt paths are
-exported only when those directories exist; Noctalia 5.4.1 has no Qt or QML
-component. Native children remain Bionic Termux processes with the native
-`$HOME/.config`, without `LD_*` or `PROOT_*` leakage. Use `--no-integrate` to
-skip integration and `--quiet` for minimal output. Re-run the installer after a
-rootfs or repository update; `build-termux.sh` runs it after integration when a
-usable rootfs is present.
+The installer precomputes `$PREFIX/libexec/mango-termux/runtime.env` with
+shell-quoted constants for the rootfs, loader, RPATH, assets, EGL, driver, and
+GBM paths. It creates the private Mesa 27, EGL, and libxml2 compatibility files
+under `$PREFIX/libexec/mango-termux` once; it never creates a global
+`libxml2.so.2`. All `rootfs-libs` links and manifests are built at install time,
+so no launch performs `find`, `mapfile`, `readlink`, or symlink recreation. It
+writes a thin constant launcher to `$PREFIX/bin/noctalia` and the identical
+`$PREFIX/bin/mango-noctalia` so `mango-integrate --check` passes, and backs up
+an old proxy as `$PREFIX/bin/noctalia.proot-bak`. It migrates configs, state,
+and wallpapers, rewrites `/root/` paths, updates `mics.conf`, and replaces an
+old `start-noctalia.sh` with a native shim. It warms
+`$XDG_CACHE_HOME/mesa_shader_cache_noctalia` and `$PREFIX/var/cache/noctalia`,
+and runs `fc-cache -s` only when available, without forcing a full rebuild.
+QML, Qt plugin, and Qt logging variables are written only when the installer
+detects a Qt build; Noctalia 5.4.1 has no Qt or QML component, so the launcher
+exports none of them and no rootfs Qt plugin path leaks to native children. No
+`VK_*` variable is exported because the binary has no Vulkan `NEEDED` entry, and
+KGSL or Zink is never forced. Native children remain Bionic Termux processes
+with the native `$HOME/.config`, without `LD_*` or `PROOT_*` leakage. Use
+`--no-integrate` to skip integration and `--quiet` for minimal output. Re-run
+the installer after a rootfs or repository update; `build-termux.sh` runs it
+after integration when a usable rootfs is present.
 
 ## 2. Install Noctalia in the rootfs
 
@@ -259,26 +273,34 @@ relevant files are `libEGL_mesa.so.0`, `libgallium-27...`, `libLLVM.so.23.1`,
 ls -l "$ROOTFS/usr/lib/libEGL_mesa.so.0" "$ROOTFS/usr/lib"/libgallium-27* "$ROOTFS/usr/lib/dri/kgsl_dri.so"
 ```
 
-The launcher uses this rootfs Mesa 27 stack and maps its libraries through a
-private directory. It never uses the stale Termux-glibc Mesa 24.2.6 library
-chain. The launcher also does not set `NOCTALIA_GPU`; that selector has been
-removed. Rendering relies on the rootfs Mesa/KGSL stack and the private EGL
-manifest described in section 4.
+The installer maps this rootfs Mesa 27 stack into a private directory once. It
+never uses the stale Termux-glibc Mesa 24.2.6 library chain. Neither the
+installer nor the launcher forces KGSL or Zink: no
+`MESA_LOADER_DRIVER_OVERRIDE` or `GALLIUM_DRIVER` is exported, so Mesa
+auto-selects the available driver and falls back to llvmpipe when KGSL is not
+usable. The launcher also does not set `NOCTALIA_GPU`; that selector has been
+removed. Rendering relies on the rootfs Mesa stack, Mesa auto-selection, and the
+private EGL manifest described in section 4.
 
 ## 3. Native launch architecture
 
 ### 3.1 Rootfs discovery
 
-Discovery is automatic. The launcher searches both rootfs layouts:
+Discovery is automatic, but only in the installer. It searches both rootfs
+layouts once:
 
 ```sh
 find "$PREFIX/var/lib/proot-distro/installed-rootfs" "$PREFIX/var/lib/proot-distro/containers" -path '*/usr/bin/noctalia' -type f 2>/dev/null
 ```
 
-For each candidate it requires `usr/bin/noctalia`,
+For each candidate the installer requires `usr/bin/noctalia`,
 `lib/ld-linux-aarch64.so.1`, and `usr/lib/libstdc++.so.6`. The first complete
-candidate is selected. Set `NOCTALIA_ROOTFS` to a rootfs path to bypass the
-search; an override that lacks any required file is rejected.
+candidate is recorded in `runtime.env` with its loader, RPATH, and asset paths.
+Set `NOCTALIA_ROOTFS` to a rootfs path when running the installer to bypass the
+search; an override that lacks any required file is rejected. The launcher
+reads the recorded paths and does not run this search, `mapfile`, or `readlink`
+at launch; if the tree changes, re-run the installer so `runtime.env` is
+regenerated.
 
 The rootfs is a binary and resource source only. The launcher does not invoke
 `proot` or `proot-distro` to run Noctalia, and no rootfs process is started at
@@ -294,10 +316,12 @@ through the Termux glibc loader by default:
 `RPATH` is
 `$PREFIX/libexec/mango-termux/rootfs-libs:$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib`,
 with existing `$ROOTFS/usr/lib/aarch64-linux-gnu` and
-`$ROOTFS/lib/aarch64-linux-gnu` appended. The launcher prepares
-`NOCTALIA_ASSETS_DIR`, XDG paths, the private EGL/Vulkan manifests, and a clean
-environment before `exec`, so the rootfs binary runs as a native Termux process
-without `proot`.
+`$ROOTFS/lib/aarch64-linux-gnu` appended; the installer records the final value
+in `runtime.env`. The installer creates the `rootfs-libs` links, manifests, and
+`NOCTALIA_ASSETS_DIR` once. The thin launcher then sources `runtime.env`, keeps
+inherited session values, exports the precomputed paths, and `exec`s the rootfs
+binary as a native Termux process without `proot`. No launch scans the rootfs
+or recreates links.
 
 The installer also creates a fallback `noctalia-native` copy and patches it
 with `patchelf`:
@@ -319,14 +343,17 @@ kills the Arch glibc startup with `SIGSYS` on `set_robust_list`, so the rootfs
 loader is not executed directly. The fallback copy also survives Noctalia
 self-reexec.
 
-The fallback cache is rebuilt when the rootfs `noctalia` binary, the rootfs
-`libstdc++.so.6`, the Termux loader, or the installer is newer than the cached
-binary, or when the selected rootfs changes.
+The installer rebuilds the fallback cache when the rootfs `noctalia` binary,
+the rootfs `libstdc++.so.6`, the Termux loader, or the installer is newer than
+the cached binary, or when the selected rootfs changes. The launcher does not
+rebuild it at runtime; if `runtime.env` names a rootfs that no longer matches
+the installed paths, the launcher exits and asks for the installer to be
+re-run.
 
 Noctalia 5.4.1 is a single ELF. There is no separate quickshell, `qs`, or QML
-process, and the binary has no Qt `NEEDED` libraries. The launcher therefore
-starts one process, `noctalia` (or `noctalia-native` in fallback mode), not a
-QML runtime tree.
+process, the binary has no Qt `NEEDED` libraries, and it has no Vulkan `NEEDED`
+libraries. The launcher therefore starts one process, `noctalia` (or
+`noctalia-native` in fallback mode), not a QML runtime tree.
 
 ### 3.3 Runtime environment
 
@@ -338,27 +365,37 @@ pid=$(pgrep -f '/usr/bin/noctalia|libexec/mango-termux/noctalia-native' | head -
 tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(HOME|PREFIX|PATH|SHELL|XDG_|WAYLAND|DBUS|MANGO|LD_|__EGL|VK_|LIBGL|GBM)'
 ```
 
-The launcher sources `$PREFIX/tmp/mango-session.env` when it exists, so Wayland,
-D-Bus, GPU, and session values from `mango-termux` are available. It then calls
-`clear_foreign_env`, which removes `LD_*`, Mesa, EGL, Vulkan, and `PROOT_*`
-variables, and applies the private rootfs paths.
+The launcher sources the installer-generated `runtime.env` once, then preserves
+an inherited `WAYLAND_DISPLAY` and `MANGO_INSTANCE_SIGNATURE` before sourcing
+`$PREFIX/tmp/mango-session.env`, restoring those inherited values afterwards so
+the live session is never overwritten. It then calls `clear_foreign_env`, which
+removes `LD_*`, Mesa, EGL, Vulkan, and `PROOT_*` variables along with
+`MESA_DEBUG`, `LIBGL_ALWAYS_SOFTWARE`, `MESA_GL_VERSION_OVERRIDE`, `vblank_mode`,
+and `ZINK_DEBUG`, and applies the precomputed rootfs paths. No rootfs or library
+scan runs at launch.
 
 `LD_LIBRARY_PATH` and `LD_PRELOAD` are not exported. In direct mode, Noctalia
-locates its libraries through the loader `--library-path` and private rootfs
-symlinks; the fallback uses the patched RPATH. The launcher also does not start a
-proot process, so no `PROOT_*` variables are present in the Noctalia
-environment.
+locates its libraries through the loader `--library-path` and the private
+install-time `rootfs-libs` links; the fallback uses the patched RPATH. The
+launcher also does not start a proot process, so no `PROOT_*` variables are
+present in the Noctalia environment.
+
+Caches persist across launches: `XDG_CACHE_HOME` defaults to `$HOME/.cache`, and
+`MESA_SHADER_CACHE_DIR` points at `$XDG_CACHE_HOME/mesa_shader_cache_noctalia`
+with `MESA_SHADER_CACHE_MAX_SIZE=256M`. QML/Qt cache paths and
+`QT_LOGGING_RULES` are exported only when `runtime.env` reports a detected Qt
+build; the current Noctalia binary has none.
 
 Native children inherit `HOME`, `PREFIX`,
 `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` with a
 bash fallback, and native XDG config, state, and data paths. Bionic Termux
-children ignore the glibc EGL and Vulkan variables.
+children ignore the glibc EGL variables and do not need a Vulkan ICD.
 
 ## 4. Graphics and resources
 
 ### 4.1 Mesa 27 and EGL vendor
 
-The launcher writes a private EGL vendor manifest at
+The installer writes a private EGL vendor manifest at
 `$PREFIX/libexec/mango-termux/egl_vendor.d/50_mesa.json`. Its `library_path`
 is an absolute path to the rootfs `libEGL_mesa.so.0`:
 
@@ -369,7 +406,8 @@ cat "$PREFIX/libexec/mango-termux/egl_vendor.d/50_mesa.json"
 `__EGL_VENDOR_LIBRARY_DIRS` points at that private directory. The private
 `rootfs-libs` directory also precedes the Termux glibc directories in the
 Noctalia RPATH, so the rootfs Mesa 27 libraries win before any Termux-glibc
-Mesa is considered.
+Mesa is considered. The launcher exports the recorded path but does not force a
+driver; Mesa auto-selection and its llvmpipe fallback remain in control.
 
 The original failure was a stale Termux-glibc Mesa 24.2.6 that required
 `libxml2.so.2`, while the current rootfs provides only `libxml2.so.16`. Do not
@@ -388,10 +426,11 @@ readlink -f "$PREFIX/libexec/mango-termux/rootfs-libs/libgbm.so.1"
 readlink -f "$PREFIX/libexec/mango-termux/rootfs-libs/libxml2.so.16"
 ```
 
-Both must resolve inside `$ROOTFS`. The launcher links each name from
-`$ROOTFS/usr/lib` or `$ROOTFS/usr/lib/aarch64-linux-gnu` when the file exists.
-It also appends existing multiarch directories to the RPATH, so a rootfs that
-uses the Debian-style multiarch layout is supported.
+Both must resolve inside `$ROOTFS`. The installer creates each name from
+`$ROOTFS/usr/lib` or `$ROOTFS/usr/lib/aarch64-linux-gnu` when the file exists,
+once during installation. It also appends existing multiarch directories to the
+RPATH, so a rootfs that uses the Debian-style multiarch layout is supported.
+Launching does not inspect or relink this farm.
 
 This is why no global `libxml2.so.2` is needed. The Termux-glibc Mesa chain is
 not loaded, and the rootfs `libxml2.so.16` is resolved from the private
@@ -399,40 +438,49 @@ directory before the Termux glibc paths.
 
 ### 4.3 Vulkan and DRI
 
-The launcher writes a private Freedreno Vulkan ICD whose `library_path` is the
+The installer writes a private Freedreno Vulkan ICD whose `library_path` is the
 absolute rootfs `libvulkan_freedreno.so`:
 
 ```sh
 cat "$PREFIX/libexec/mango-termux/vulkan/icd.d/freedreno_icd.aarch64.json"
 ```
 
-Both `VK_ICD_FILENAMES` and `VK_DRIVER_FILES` point at that manifest.
-`LIBGL_DRIVERS_PATH` points at `$ROOTFS/usr/lib/dri`, which contains the KGSL
-Gallium driver. `GBM_BACKENDS_PATH` is set to `$ROOTFS/usr/lib/gbm` when that
-directory exists.
+Noctalia 5.4.1 has no Vulkan `NEEDED` entry, so the launcher does not export
+`VK_ICD_FILENAMES` or `VK_DRIVER_FILES`; the installed manifest is inert and
+kept only for inspection or a future Vulkan build. `LIBGL_DRIVERS_PATH` points
+at `$ROOTFS/usr/lib/dri`, which contains the KGSL Gallium driver.
+`GBM_BACKENDS_PATH` is set to `$ROOTFS/usr/lib/gbm` when that directory exists.
+Neither KGSL nor Zink is forced, so Mesa chooses the available driver and may
+use llvmpipe.
 
 These variables are scoped to the Noctalia process and its native children.
-Bionic Termux children ignore the glibc EGL and Vulkan variables.
+Bionic Termux children ignore the glibc EGL variables and never see a Vulkan
+ICD path from this launcher.
 
 ### 4.4 QML and Qt note
 
 Noctalia 5.4.1 has no Qt or QML component. There is no `quickshell`, `qs`, or
 QML process to launch, and the ELF has no Qt `NEEDED` libraries. The installer
-therefore sets `QML2_IMPORT_PATH`, `QML_IMPORT_PATH`, `QT_PLUGIN_PATH`, and
-`QT_QPA_PLATFORM_PLUGIN_PATH` only when the corresponding rootfs Qt 6
-directories exist. With the current package these variables are absent and
-inert.
+detects Qt from `readelf` plus existing rootfs directories and records
+`NOCTALIA_HAS_QT=0` or `1` in `runtime.env`. With the current package it records
+`0`, so the launcher exports no `QML2_IMPORT_PATH`, `QML_IMPORT_PATH`,
+`QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`, or `QT_LOGGING_RULES`. In
+particular, no rootfs `qt6/plugins` directory is placed in the environment for
+native Termux children.
 
-The values used for a future Noctalia or Quickshell Qt build are
+The values recorded for a future Noctalia or Quickshell Qt build are
 `QML2_IMPORT_PATH="$ROOTFS/usr/lib/qt6/qml"`, `QML_IMPORT_PATH` with the same
 value, `QT_PLUGIN_PATH="$ROOTFS/usr/lib/qt6/plugins"`, and
-`QT_QPA_PLATFORM_PLUGIN_PATH="$ROOTFS/usr/lib/qt6/plugins/platforms"`. They are
-future-proof exports, not a requirement of the current binary.
+`QT_QPA_PLATFORM_PLUGIN_PATH="$ROOTFS/usr/lib/qt6/plugins/platforms"`. The
+launcher exports them, sets `QML_DISK_CACHE_PATH=$HOME/.cache/noctalia/qmlcache`
+and `QT_LOGGING_RULES=*.debug=false`, and uses those Qt paths only when
+`NOCTALIA_HAS_QT=1`. They are future-proof exports, not a requirement of the
+current binary.
 
 ### 4.5 Fonts, assets, and XDG paths
 
-The native launcher assigns the resource paths directly. Inspect the relevant
-assignments:
+The installed launcher assigns the precomputed resource paths directly. Inspect
+the relevant assignments:
 
 ```sh
 grep -n 'XDG_DATA_DIRS\|XDG_CONFIG_DIRS\|NOCTALIA_ASSETS_DIR\|FONTCONFIG_PATH' "$PREFIX/bin/mango-noctalia"
@@ -446,12 +494,16 @@ The effective values are:
   first, then rootfs config;
 - `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"` — Noctalia assets;
 - `FONTCONFIG_PATH=$PREFIX/etc/fonts` — native Termux fontconfig, when that
-  directory exists.
+  directory exists;
+- `XDG_CACHE_HOME="$HOME/.cache"` — persistent cache root, with
+  `MESA_SHADER_CACHE_DIR=$XDG_CACHE_HOME/mesa_shader_cache_noctalia` and a 256M
+  cap.
 
 Noctalia also uses native `XDG_CONFIG_HOME=$HOME/.config`,
 `XDG_STATE_HOME=$HOME/.local/state`, and
-`XDG_DATA_HOME=$HOME/.local/share`. Configuration and state therefore live in
-the Termux home directory, not in the rootfs.
+`XDG_DATA_HOME=$HOME/.local/share`. Configuration, state, and shader caches
+therefore live in the Termux home directory, not in the rootfs, and survive
+restarts.
 
 ## 5. MangoWM integration
 
@@ -525,6 +577,17 @@ A rebuild installs the current native launcher and re-applies integrations:
 rootfs is optional at build time; the next MangoWM start applies Noctalia
 integration when a rootfs becomes available.
 
+`run-mango.sh` now checks an integration stamp at
+`$prefix/tmp/mango-integrate.stamp` before scanning. The stamp keys on the
+mtime and size of `mango-integrate`, `mango-noctalia`, and `mango-firefox`, on
+`~/.config/mango/mics.conf`, and on the mtime of `$prefix/share/applications`.
+An unchanged session skips integration entirely. On `--restart` it terminates
+leftover Noctalia processes matching
+`/usr/bin/noctalia|libexec/mango-termux/noctalia-native`, then runs integration
+before starting the new compositor, so a stale panel is not duplicated. `MANGO_INSTANCE_SIGNATURE` is no longer persisted in
+the session environment; only `WAYLAND_DISPLAY` is kept for manual shells, and
+the live signature is inherited by the launcher.
+
 `mango-integrate --check` is read-only. It returns zero when the wrappers,
 native Noctalia launcher, Firefox entries, Firefox launcher, and terminal
 entries are consistent. A nonzero result identifies the missing item.
@@ -581,8 +644,17 @@ ps -A -o pid,stat,comm,args | grep -E 'mango|noctalia|proot'
 
 The expected tree is `mango -> dbus-run-session -> noctalia` in direct mode, or
 `... -> noctalia-native` when `NOCTALIA_DIRECT_LOADER=0`. The
-`dbus-run-session` stage appears when no session bus was inherited. No `proot`
-or `proot-distro` process is present.
+`dbus-run-session` stage appears when no session bus was inherited; the launcher
+re-execs under it once and guards the re-exec with `NOCTALIA_DBUS_WRAPPED` so it
+cannot recurse. No `proot` or `proot-distro` process is present.
+
+For a no-argument launch the thin wrapper takes a non-blocking `flock` on
+`$XDG_RUNTIME_DIR/noctalia-${MANGO_INSTANCE_SIGNATURE##*/}.lock` on file
+descriptor 9. A second no-argument launch prints one line and exits 0 instead of
+starting a duplicate panel. Commands such as `msg`, `--version`, and `--help`
+bypass the lock. The launcher preserves an inherited `MANGO_INSTANCE_SIGNATURE`
+across `mango-session.env`; `run-mango.sh` no longer writes it to that file, so
+no stale value overrides the live session.
 
 Stop the native process with
 `pkill -f '/usr/bin/noctalia|libexec/mango-termux/noctalia-native'`. Do not rely
@@ -669,8 +741,8 @@ grep -n 'mango-firefox' "$PREFIX/share/applications/firefox.desktop"
 ```
 
 The `Exec=` value must point directly at `$PREFIX/bin/mango-firefox`, not at a
-proot bridge. Firefox is a bionic application and ignores the glibc EGL and
-Vulkan variables used by Noctalia.
+proot bridge. Firefox is a bionic application; it ignores the glibc EGL
+variables and does not need the Noctalia Vulkan ICD.
 
 ## 9. Troubleshooting
 
@@ -687,16 +759,19 @@ ls -l "$PREFIX/bin/noctalia" "$PREFIX/bin/mango-noctalia" "$PREFIX/libexec/mango
 Common causes:
 
 - no usable rootfs: install an Arch rootfs with `usr/bin/noctalia`, or set
-  `NOCTALIA_ROOTFS`;
+  `NOCTALIA_ROOTFS` and re-run the installer;
 - `patchelf` missing: run `pkg install patchelf`;
 - Termux glibc loader missing: verify
   `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`;
-- rootfs `libstdc++.so.6` missing: the rootfs is incomplete.
+- rootfs `libstdc++.so.6` missing: the rootfs is incomplete;
+- stale `runtime.env`: the recorded rootfs, loader, or native binary no longer
+  exists, so re-run `install-noctalia-termux.sh`.
 
-The message `noctalia: already running` means an existing Noctalia instance
-owns the IPC endpoint. Stop the native process with
+The message that another instance is already running comes from the single
+`flock` taken for a no-argument launch. Stop the native process with
 `pkill -f '/usr/bin/noctalia|libexec/mango-termux/noctalia-native'` and restart
-the session.
+the session; a `msg`, `--version`, or `--help` command is never blocked by this
+lock.
 
 ### 9.2 EGL, libxml2, and eglGetDisplay
 
@@ -711,14 +786,15 @@ rm -rf "$PREFIX/libexec/mango-termux"
 
 The manifest must point at the absolute rootfs `libEGL_mesa.so.0`, and the GBM
 link must resolve inside the rootfs. Removing `$PREFIX/libexec/mango-termux`
-deletes the fallback binary, symlinks, and manifests; the next `noctalia` run
-rebuilds them.
+deletes the fallback binary, `runtime.env`, symlinks, and manifests; re-run
+`install-noctalia-termux.sh` to recreate them. The launcher does not rebuild
+this private runtime at launch.
 
 Do not create a global `libxml2.so.2` and do not modify the rootfs. The
 installer creates only a private `rootfs-libs/libxml2.so.2` compatibility link
 when the rootfs provides `libxml2.so.16`. If the log still reports
 `eglGetDisplay failed` or requests `libxml2.so.2`, the private runtime is stale
-or the rootfs lacks Mesa 27; rebuild the runtime and verify section 2.3.
+or the rootfs lacks Mesa 27; re-run the installer and verify section 2.3.
 
 ### 9.3 /root/Walls wallpaper warning
 
@@ -748,8 +824,10 @@ tr '\0' '\n' < "/proc/$pid/environ" | grep MANGO_INSTANCE_SIGNATURE
 If the variable is absent, Noctalia was started outside the MangoWM autostart
 context. For a manual launch, export
 `MANGO_INSTANCE_SIGNATURE="$(ls "$PREFIX/tmp"/mango-*.sock | head -1)"` first.
-With autostart, MangoWM provides the value directly. `MANGO_INSTANCE_SIGNATURE`
-is not a proot bind; it is an inherited environment variable.
+With autostart, MangoWM provides the value directly, and the launcher preserves
+it even while sourcing `mango-session.env`; `run-mango.sh` does not persist a
+stale copy. `MANGO_INSTANCE_SIGNATURE` is not a proot bind; it is an inherited
+environment variable.
 
 A log line `workspace backend=ext-workspace` instead of
 `workspace backend=mango-ipc` confirms that the signature was missing.
@@ -766,7 +844,9 @@ command -v dbus-run-session
 `XDG_RUNTIME_DIR` must be `$PREFIX/tmp` and `WAYLAND_DISPLAY` must be
 `wayland-0`. If `DBUS_SESSION_BUS_ADDRESS` is already set, Noctalia inherits it.
 Otherwise the launcher re-executes itself under the native Termux
-`dbus-run-session` when that command exists.
+`dbus-run-session` when that command exists. The re-exec runs once and is
+guarded by `NOCTALIA_DBUS_WRAPPED=1`, so a missing or delayed bus cannot cause a
+loop.
 
 Use native Termux D-Bus, not Arch D-Bus. System D-Bus services such as upower,
 NetworkManager, logind, and polkit are not available in this Termux session.
@@ -781,11 +861,14 @@ Check the KGSL device and the rootfs KGSL driver:
 ls -l /dev/kgsl-3d0 "$ROOTFS/usr/lib/dri/kgsl_dri.so"
 ```
 
-Both must exist. The launcher does not set `NOCTALIA_GPU`; that selector has
-been removed. Rendering uses the rootfs Mesa 27 stack and the private EGL
-manifest. If `/dev/kgsl-3d0` is unavailable or the rootfs lacks
-`dri/kgsl_dri.so`, Noctalia cannot use KGSL and may fall back to llvmpipe or
-render a black surface.
+Both should exist for hardware acceleration. The launcher does not set
+`NOCTALIA_GPU`; that selector has been removed. It also does not force KGSL or
+Zink: no `MESA_LOADER_DRIVER_OVERRIDE` or `GALLIUM_DRIVER` is exported, so Mesa
+auto-selects the available driver. Rendering uses the rootfs Mesa 27 stack and
+the private EGL manifest. If `/dev/kgsl-3d0` is unavailable or the rootfs lacks
+`dri/kgsl_dri.so`, Mesa falls back to llvmpipe; that software path is expected
+and persistent shader caches keep it usable. A black surface with llvmpipe in
+the log points at a compositor or surface issue rather than a forced driver.
 
 ### 9.7 Native applications do not appear
 
@@ -811,9 +894,10 @@ rm -rf "$PREFIX/libexec/mango-termux"
 mango-termux --restart
 ```
 
-This removes the fallback binary, private libraries, EGL manifest, and Vulkan
-ICD. The installer recreates them from the detected rootfs. Keep the rootfs
-intact; it remains the source for the ELF and resources.
+This removes the fallback binary, `runtime.env`, private libraries, EGL
+manifest, and Vulkan ICD. The installer recreates them once from the detected
+rootfs and warms the caches again. Keep the rootfs intact; it remains the source
+for the ELF and resources.
 
 ## 10. Update and removal
 
@@ -829,8 +913,8 @@ mango-termux --restart
 
 `proot-distro` is used only for the package update. The restart still runs
 Noctalia natively. A newer rootfs `noctalia` binary or `libstdc++.so.6`
-invalidates the private native copy, so the launcher rebuilds it before
-starting.
+invalidates the private native copy; `install-noctalia-termux.sh` rebuilds it
+and refreshes `runtime.env` before the restart.
 
 ### 10.2 Reset native state
 
@@ -867,8 +951,12 @@ The native launcher and the autostart path use the following values. Paths in
 this list are the effective values after the installer-generated launcher
 applies its environment.
 
-- `NOCTALIA_ROOTFS` — optional explicit rootfs override. When unset, the
-  launcher searches `installed-rootfs/*` and `containers/*/rootfs`.
+- `NOCTALIA_ROOTFS` — install-time rootfs override, recorded in `runtime.env`.
+  The launcher does not search; re-run the installer to change it.
+- `NOCTALIA_LOADER`, `NOCTALIA_RPATH`, and `NOCTALIA_NATIVE_BIN` — constants
+  recorded by the installer. The launcher does not rediscover or relink them.
+- `NOCTALIA_HAS_QT` — `0` for the current binary; `1` only when the installer
+  detects a Qt build and existing Qt directories.
 - `ROOTFS` — the selected rootfs for the current shell or guide session; it is
   not exported by the launcher itself.
 - `HOME` — native Termux home, normally
@@ -884,6 +972,10 @@ applies its environment.
 - `XDG_CONFIG_HOME` — `$HOME/.config`.
 - `XDG_STATE_HOME` — `$HOME/.local/state`.
 - `XDG_DATA_HOME` — `$HOME/.local/share`.
+- `XDG_CACHE_HOME` — `$HOME/.cache`, used for persistent Mesa and QML/Qt
+  caches.
+- `MESA_SHADER_CACHE_DIR` — `$XDG_CACHE_HOME/mesa_shader_cache_noctalia`.
+- `MESA_SHADER_CACHE_MAX_SIZE` — `256M`.
 - `XDG_DATA_DIRS` — `$PREFIX/share:$ROOTFS/usr/share`, with any existing
   entries appended.
 - `XDG_CONFIG_DIRS` — `$PREFIX/etc/xdg:$ROOTFS/etc/xdg`, with any existing
@@ -892,29 +984,39 @@ applies its environment.
 - `FONTCONFIG_PATH` — `$PREFIX/etc/fonts` when that directory exists.
 - `__EGL_VENDOR_LIBRARY_DIRS` —
   `$PREFIX/libexec/mango-termux/egl_vendor.d`.
-- `VK_ICD_FILENAMES` and `VK_DRIVER_FILES` — the absolute rootfs Freedreno ICD
-  manifest under `$PREFIX/libexec/mango-termux/vulkan/icd.d`.
+- `VK_ICD_FILENAMES` and `VK_DRIVER_FILES` — not exported. Noctalia has no
+  Vulkan `NEEDED` entry, so the installed Freedreno ICD under
+  `$PREFIX/libexec/mango-termux/vulkan/icd.d` is inert.
 - `LIBGL_DRIVERS_PATH` — `$ROOTFS/usr/lib/dri` when that directory exists.
 - `GBM_BACKENDS_PATH` — `$ROOTFS/usr/lib/gbm` when that directory exists.
 - `DBUS_SESSION_BUS_ADDRESS` — inherited when present; otherwise a native Termux
   session bus is started with `dbus-run-session`.
 - `MANGO_INSTANCE_SIGNATURE` — inherited from MangoWM. It enables the
-  `mango-ipc` workspace backend. It is not set by the Noctalia launcher and is
+  `mango-ipc` workspace backend. The launcher preserves it while sourcing
+  `mango-session.env`, and `run-mango.sh` no longer persists a stale copy. It is
   not a proot bind.
 - `NOCTALIA_DBUS_WRAPPED` — internal guard set to `1` during the
   `dbus-run-session` re-exec to prevent recursion.
 - `NOCTALIA_DIRECT_LOADER` — `1` by default (rootfs ELF through the Termux
   loader); set to `0` to use the patched fallback cache.
 - `NOCTALIA_GPU` — removed and not read. The launcher does not set it.
+- `QT_LOGGING_RULES` — `*.debug=false`, exported only when
+  `NOCTALIA_HAS_QT=1`.
+- `QML2_IMPORT_PATH`, `QML_IMPORT_PATH`, `QT_PLUGIN_PATH`, and
+  `QT_QPA_PLATFORM_PLUGIN_PATH` — recorded and exported only when
+  `NOCTALIA_HAS_QT=1`; absent for the current binary.
 
 The launcher clears `LD_LIBRARY_PATH`, `LD_PRELOAD`,
 `MESA_LOADER_DRIVER_OVERRIDE`, `GALLIUM_DRIVER`,
-`__EGL_VENDOR_LIBRARY_FILENAMES`, `EGL_PLATFORM`, `FD_KGSL_DMABUF`, and all
-`PROOT_*` variables. It does not export `LD_LIBRARY_PATH` or `LD_PRELOAD`.
-Direct mode resolves libraries with the loader `--library-path`; the fallback
-uses the patched RPATH and the private `rootfs-libs` directory.
+`__EGL_VENDOR_LIBRARY_FILENAMES`, `EGL_PLATFORM`, `FD_KGSL_DMABUF`,
+`MESA_DEBUG`, `LIBGL_ALWAYS_SOFTWARE`, `MESA_GL_VERSION_OVERRIDE`, `vblank_mode`,
+`ZINK_DEBUG`, and all `PROOT_*` variables. It does not export
+`LD_LIBRARY_PATH` or `LD_PRELOAD`, and it does not export any `VK_*` variable.
+Direct mode resolves libraries with the loader `--library-path` and the
+install-time `rootfs-libs` links; the fallback uses the patched RPATH.
 
-QML and Qt variables are exported only when the corresponding rootfs Qt 6
-directories exist. The current Noctalia 5.4.1 binary has no Qt or QML
-component, so they are absent and inert. The values in section 4.4 apply only to
-a future Quickshell or Qt build.
+QML, Qt plugin, and Qt logging variables are written to `runtime.env` and
+exported only when the installer detects a Qt build. The current Noctalia 5.4.1
+binary has no Qt or QML component, so these variables are absent and no rootfs
+Qt plugin path leaks. The values in section 4.4 apply only to a future
+Quickshell or Qt build.
