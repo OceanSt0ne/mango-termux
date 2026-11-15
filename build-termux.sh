@@ -202,6 +202,26 @@ if [[ "${MANGO_SKIP_INTEGRATIONS:-0}" != "1" ]]; then
     echo "warning: mango integrations were not applied." >&2
     echo "  Run manually: $PREFIX/bin/mango-integrate ${integrate_args[*]}" >&2
   fi
+
+  noctalia_rootfs=""
+  for candidate in "$PREFIX"/var/lib/proot-distro/installed-rootfs/* \
+                   "$PREFIX"/var/lib/proot-distro/containers/*/rootfs; do
+    if [[ -x "$candidate/usr/bin/noctalia" &&
+          -e "$candidate/lib/ld-linux-aarch64.so.1" &&
+          -e "$candidate/usr/lib/libstdc++.so.6" ]]; then
+      noctalia_rootfs="$candidate"
+      break
+    fi
+  done
+  installer="$self_dir/install-noctalia-termux.sh"
+  if [[ -f "$installer" && -n "$noctalia_rootfs" ]]; then
+    echo
+    echo "Installing the native Noctalia launcher..."
+    if ! "$installer" --quiet --no-integrate; then
+      echo "warning: the Noctalia installer failed." >&2
+      echo "  Run manually: $installer" >&2
+    fi
+  fi
 fi
 
 echo
