@@ -168,6 +168,11 @@ required_lib() {
   return 1
 }
 
+declare -gA lib_paths_cache=()
+declare -ga rootfs_lib_files=()
+declare -ga FOUND_LIB_PATHS=()
+rootfs_libs_scanned=""
+
 rootfs_usable() {
   local rootfs="${1%/}"
   [[ -n $rootfs &&
@@ -190,30 +195,53 @@ discover_rootfs() {
   return 1
 }
 
-find_lib_paths() {
-  local pattern="$1"
-  local dir match base seen=""
+scan_rootfs_libs() {
+  if [[ $rootfs_libs_scanned == "$ROOTFS" ]]; then
+    return 0
+  fi
+  local dir file
+  rootfs_lib_files=()
+  lib_paths_cache=()
   for dir in "$ROOTFS/usr/lib" "$ROOTFS/usr/lib/aarch64-linux-gnu"; do
     [[ -d $dir ]] || continue
-    for match in "$dir"/$pattern; do
-      [[ -e $match ]] || continue
-      base="${match##*/}"
-      case ":$seen:" in
-        *":$base:"*) continue ;;
-      esac
-      seen="$seen:$base"
-      printf '%s\n' "$match"
+    for file in "$dir"/*; do
+      [[ -e $file ]] || continue
+      rootfs_lib_files+=("$file")
     done
   done
+  rootfs_libs_scanned="$ROOTFS"
+}
+
+find_lib_paths() {
+  local pattern="$1"
+  local file base seen=":" out=""
+  FOUND_LIB_PATHS=()
+  if [[ -n ${lib_paths_cache[$pattern]+x} ]]; then
+    if [[ -n ${lib_paths_cache[$pattern]} ]]; then
+      mapfile -t FOUND_LIB_PATHS <<< "${lib_paths_cache[$pattern]%$'\n'}"
+    fi
+    return 0
+  fi
+  scan_rootfs_libs
+  for file in ${rootfs_lib_files[@]+"${rootfs_lib_files[@]}"}; do
+    base="${file##*/}"
+    [[ $base == $pattern ]] || continue
+    case "$seen" in
+      *":$base:"*) continue ;;
+    esac
+    seen+="$base:"
+    FOUND_LIB_PATHS+=("$file")
+  done
+  if ((${#FOUND_LIB_PATHS[@]})); then
+    printf -v out '%s\n' "${FOUND_LIB_PATHS[@]}"
+  fi
+  lib_paths_cache[$pattern]="$out"
 }
 
 first_lib() {
-  local path
-  while IFS= read -r path; do
-    printf '%s\n' "$path"
-    return 0
-  done < <(find_lib_paths "$1")
-  return 1
+  find_lib_paths "$1"
+  ((${#FOUND_LIB_PATHS[@]})) || return 1
+  printf '%s\n' "${FOUND_LIB_PATHS[0]}"
 }
 
 resolve_runtime_rootfs() {
@@ -268,15 +296,13 @@ bootstrap_rootfs() {
 
 setup_private_runtime() {
   local pattern entry
-  local -a matches=()
   local -a missing_required=()
 
   mkdir -p "$priv_dir" "$libs_dir" "$egl_dir" "$vulkan_dir"
 
   for pattern in "${runtime_libs[@]}"; do
-    matches=()
-    mapfile -t matches < <(find_lib_paths "$pattern")
-    if ((${#matches[@]} == 0)); then
+    find_lib_paths "$pattern"
+    if ((${#FOUND_LIB_PATHS[@]} == 0)); then
       if required_lib "$pattern"; then
         missing_required+=("$pattern")
       else
@@ -284,7 +310,7 @@ setup_private_runtime() {
       fi
       continue
     fi
-    for entry in "${matches[@]}"; do
+    for entry in "${FOUND_LIB_PATHS[@]}"; do
       ln -sfn "$entry" "$libs_dir/${entry##*/}"
     done
   done
@@ -334,6 +360,70 @@ runtime_rpath() {
   printf '%s\n' "$rpath"
 }
 
+write_runtime_env() {
+  local runtime_env="$priv_dir/runtime.env"
+  local tmp has_qt=0 libgl="" gbm=""
+  local qml="" qt_plugin="" qt_platform=""
+
+  if command -v readelf >/dev/null 2>&1 &&
+     readelf -d "$ROOTFS/usr/bin/noctalia" 2>/dev/null |
+       grep -q 'NEEDED.*libQt6'; then
+    has_qt=1
+  fi
+  if [[ -d "$ROOTFS/usr/lib/dri" ]]; then
+    libgl="$ROOTFS/usr/lib/dri"
+  fi
+  if [[ -d "$ROOTFS/usr/lib/gbm" ]]; then
+    gbm="$ROOTFS/usr/lib/gbm"
+  fi
+  if ((has_qt)); then
+    if [[ -d "$ROOTFS/usr/lib/qt6/qml" ]]; then
+      qml="$ROOTFS/usr/lib/qt6/qml"
+    fi
+    if [[ -d "$ROOTFS/usr/lib/qt6/plugins" ]]; then
+      qt_plugin="$ROOTFS/usr/lib/qt6/plugins"
+    fi
+    if [[ -d "$ROOTFS/usr/lib/qt6/plugins/platforms" ]]; then
+      qt_platform="$ROOTFS/usr/lib/qt6/plugins/platforms"
+    fi
+  fi
+
+  tmp="$(mktemp "$TMPDIR/.runtime.env.XXXXXX")"
+  {
+    printf 'NOCTALIA_ROOTFS=%q\n' "$ROOTFS"
+    printf 'NOCTALIA_LOADER=%q\n' "$loader"
+    printf 'NOCTALIA_RPATH=%q\n' "$(runtime_rpath)"
+    printf 'NOCTALIA_NATIVE_BIN=%q\n' "$native_bin"
+    printf 'NOCTALIA_ASSETS_DIR=%q\n' "$ROOTFS/usr/share/noctalia/assets"
+    printf 'NOCTALIA_EGL_DIR=%q\n' "$egl_dir"
+    printf 'NOCTALIA_LIBGL_DRIVERS=%q\n' "$libgl"
+    printf 'NOCTALIA_GBM_BACKENDS=%q\n' "$gbm"
+    printf 'NOCTALIA_HAS_QT=%d\n' "$has_qt"
+    if ((has_qt)); then
+      if [[ -n $qml ]]; then
+        printf 'NOCTALIA_QML_IMPORT=%q\n' "$qml"
+      fi
+      if [[ -n $qt_plugin ]]; then
+        printf 'NOCTALIA_QT_PLUGIN=%q\n' "$qt_plugin"
+      fi
+      if [[ -n $qt_platform ]]; then
+        printf 'NOCTALIA_QT_PLATFORM_PLUGIN=%q\n' "$qt_platform"
+      fi
+      printf 'NOCTALIA_QML_CACHE=%q\n' "$HOME/.cache/noctalia/qmlcache"
+      printf 'NOCTALIA_QT_LOGGING=%q\n' '*.debug=false'
+    fi
+  } >"$tmp"
+  chmod 0644 "$tmp"
+  if [[ -f $runtime_env ]] && cmp -s "$tmp" "$runtime_env"; then
+    rm -f "$tmp"
+    chmod 0644 "$runtime_env" 2>/dev/null || true
+    info "runtime env is up to date: $runtime_env"
+    return 0
+  fi
+  mv -f "$tmp" "$runtime_env"
+  info "wrote runtime env: $runtime_env"
+}
+
 build_patched_cache() {
   local libstdcpp rpath tmp
   if ! command -v patchelf >/dev/null 2>&1; then
@@ -378,278 +468,210 @@ build_patched_cache() {
   info "built patched fallback cache: $native_bin"
 }
 
-launcher_template() {
-  cat <<'LAUNCHER_EOF'
+emit_launcher() {
+  local out="$1"
+  local launcher_shell="$PREFIX/bin/fish"
+  if [[ ! -x $launcher_shell ]]; then
+    launcher_shell="$PREFIX/bin/bash"
+  fi
+  {
+    cat <<'LAUNCHER_HEAD'
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
-PREFIX="__PREFIX__"
-embedded_rootfs="__ROOTFS__"
-HOME="${HOME:-__HOME__}"
+LAUNCHER_HEAD
+    printf 'PREFIX=%q\n' "$PREFIX"
+    printf 'HOME=%q\n' "${HOME:-$PREFIX/home}"
+    printf 'SHELL=%q\n' "$launcher_shell"
+    cat <<'LAUNCHER_BODY'
 TMPDIR="$PREFIX/tmp"
 XDG_RUNTIME_DIR="$PREFIX/tmp"
 PATH="$PREFIX/bin:/system/bin:/system/xbin"
-loader="$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
 
 clear_foreign_env() {
   unset LD_LIBRARY_PATH LD_PRELOAD LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH \
     MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER VK_DRIVER_FILES \
     VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_DIRS \
-    __EGL_VENDOR_LIBRARY_FILENAMES FD_KGSL_DMABUF EGL_PLATFORM
+    __EGL_VENDOR_LIBRARY_FILENAMES FD_KGSL_DMABUF EGL_PLATFORM \
+    MESA_DEBUG LIBGL_ALWAYS_SOFTWARE MESA_GL_VERSION_OVERRIDE \
+    vblank_mode ZINK_DEBUG QML2_IMPORT_PATH QML_IMPORT_PATH \
+    QML_DISK_CACHE_PATH QSG_RHI_BACKEND QT_QUICK_BACKEND \
+    QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH QT_LOGGING_RULES
   local name
   while IFS= read -r name; do
     unset "$name"
   done < <(compgen -v PROOT_ || true)
 }
 
-rootfs_usable() {
-  local rootfs="${1%/}"
-  [[ -n $rootfs &&
-     -x "$rootfs/usr/bin/noctalia" &&
-     -e "$rootfs/lib/ld-linux-aarch64.so.1" &&
-     -e "$rootfs/usr/lib/libstdc++.so.6" ]]
-}
+inherit_wayland="${WAYLAND_DISPLAY-}"
+inherit_signature="${MANGO_INSTANCE_SIGNATURE-}"
+requested_rootfs="${NOCTALIA_ROOTFS-}"
 
-discover_rootfs() {
-  local candidate
-  for candidate in \
-    "$PREFIX"/var/lib/proot-distro/installed-rootfs/* \
-    "$PREFIX"/var/lib/proot-distro/containers/*/rootfs; do
-    [[ -d $candidate ]] || continue
-    if rootfs_usable "$candidate"; then
-      printf '%s\n' "${candidate%/}"
-      return 0
-    fi
-  done
-  return 1
-}
-
-find_lib_paths() {
-  local pattern="$1"
-  local dir match base seen=""
-  for dir in "$rootfs/usr/lib" "$rootfs/usr/lib/aarch64-linux-gnu"; do
-    [[ -d $dir ]] || continue
-    for match in "$dir"/$pattern; do
-      [[ -e $match ]] || continue
-      base="${match##*/}"
-      case ":$seen:" in
-        *":$base:"*) continue ;;
-      esac
-      seen="$seen:$base"
-      printf '%s\n' "$match"
-    done
-  done
-}
-
-ensure_private_runtime() {
-  local native_dir="$PREFIX/libexec/mango-termux"
-  local libs_dir="$native_dir/rootfs-libs"
-  local egl_dir="$native_dir/egl_vendor.d"
-  local vulkan_dir="$native_dir/vulkan/icd.d"
-  local pattern match entry target
-  local -a matches=()
-
-  mkdir -p "$libs_dir" "$egl_dir" "$vulkan_dir"
-
-  for pattern in \
-    libEGL_mesa.so.0 'libgallium-27*' libLLVM.so.23.1 libgbm.so.1 \
-    libxml2.so.16 libstdc++.so.6 libgcc_s.so.1 libz.so.1 libzstd.so.1 \
-    libffi.so.8 libSPIRV-Tools.so libsensors.so.5 libicuuc.so.78 \
-    libicudata.so.78 libedit.so.0 libncursesw.so.6 \
-    'libwayland-*.so.0' 'libwayland-*.so.1' libexpat.so.1 libdrm.so.2 \
-    libdisplay-info.so.2 libudev.so.1 libvulkan_freedreno.so; do
-    matches=()
-    mapfile -t matches < <(find_lib_paths "$pattern")
-    for entry in ${matches[@]+"${matches[@]}"}; do
-      ln -sfn "$entry" "$libs_dir/${entry##*/}"
-    done
-  done
-
-  target=""
-  while IFS= read -r match; do
-    target="$match"
-    break
-  done < <(find_lib_paths libxml2.so.2)
-  if [[ -z $target ]]; then
-    while IFS= read -r match; do
-      target="$match"
-      break
-    done < <(find_lib_paths libxml2.so.16)
-  fi
-  if [[ -n $target ]]; then
-    ln -sfn "$target" "$libs_dir/libxml2.so.2"
-  fi
-
-  target=""
-  while IFS= read -r match; do
-    target="$match"
-    break
-  done < <(find_lib_paths libEGL_mesa.so.0)
-  if [[ -n $target ]]; then
-    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s"}}\n' \
-      "$target" >"$egl_dir/50_mesa.json"
-  fi
-
-  target=""
-  while IFS= read -r match; do
-    target="$match"
-    break
-  done < <(find_lib_paths libvulkan_freedreno.so)
-  if [[ -n $target ]]; then
-    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s"}}\n' \
-      "$target" >"$vulkan_dir/freedreno_icd.aarch64.json"
-  fi
-}
-
-extend_paths() {
-  local out="$1" dir
-  local -a extra
-  IFS=: read -ra extra <<< "${2:-}"
-  for dir in ${extra[@]+"${extra[@]}"}; do
-    [[ -n $dir ]] || continue
-    case ":$out:" in
-      *":$dir:"*) continue ;;
-    esac
-    out="$out:$dir"
-  done
-  printf '%s' "$out"
-}
-
-clear_foreign_env
-
-rootfs="${NOCTALIA_ROOTFS:-$embedded_rootfs}"
-rootfs="${rootfs%/}"
-if [[ -n ${NOCTALIA_ROOTFS:-} ]]; then
-  if ! rootfs_usable "$rootfs"; then
-    printf 'error: NOCTALIA_ROOTFS=%s lacks usr/bin/noctalia, lib/ld-linux-aarch64.so.1, or usr/lib/libstdc++.so.6\n' \
-      "$rootfs" >&2
-    exit 1
-  fi
-elif ! rootfs_usable "$rootfs"; then
-  rootfs="$(discover_rootfs || true)"
-  if [[ -z $rootfs ]]; then
-    printf 'error: no usable Noctalia rootfs found\n' >&2
-    printf '  set NOCTALIA_ROOTFS or re-run install-noctalia-termux.sh\n' >&2
-    exit 1
-  fi
-fi
-
-if [[ ! -e $loader ]]; then
-  printf 'error: Termux glibc loader not found at %s\n' "$loader" >&2
-  exit 1
-fi
-
-libstdcpp="$rootfs/usr/lib/libstdc++.so.6"
-if [[ ! -e $libstdcpp ]]; then
-  printf 'error: rootfs libstdc++ not found at %s\n' "$libstdcpp" >&2
-  exit 1
-fi
-libstdcpp="$(readlink -f "$libstdcpp")"
+fixed_prefix="$PREFIX"
+fixed_home="$HOME"
+fixed_shell="$SHELL"
 
 session="$PREFIX/tmp/mango-session.env"
 if [[ -f $session ]]; then
   set -a
+  # shellcheck disable=SC1090
   source "$session"
   set +a
 fi
 
-export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH
-SHELL="$PREFIX/bin/fish"
-[[ -x $SHELL ]] || SHELL="$PREFIX/bin/bash"
-export SHELL
+if [[ -n $inherit_wayland ]]; then
+  export WAYLAND_DISPLAY="$inherit_wayland"
+fi
+if [[ -n $inherit_signature ]]; then
+  export MANGO_INSTANCE_SIGNATURE="$inherit_signature"
+fi
+
+PREFIX="$fixed_prefix"
+HOME="$fixed_home"
+SHELL="$fixed_shell"
+TMPDIR="$PREFIX/tmp"
+XDG_RUNTIME_DIR="$PREFIX/tmp"
+PATH="$PREFIX/bin:/system/bin:/system/xbin"
+export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH SHELL
+
+runtime_env="$PREFIX/libexec/mango-termux/runtime.env"
+if [[ ! -f $runtime_env ]]; then
+  printf 'error: missing runtime env: %s\n' "$runtime_env" >&2
+  printf '  re-run install-noctalia-termux.sh\n' >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$runtime_env"
+
+if [[ -n $requested_rootfs && ${requested_rootfs%/} != "$NOCTALIA_ROOTFS" ]]; then
+  printf 'error: NOCTALIA_ROOTFS=%s does not match installed rootfs %s\n' \
+    "$requested_rootfs" "$NOCTALIA_ROOTFS" >&2
+  printf '  re-run install-noctalia-termux.sh to change the rootfs\n' >&2
+  exit 1
+fi
+
+if [[ ! -d $NOCTALIA_ROOTFS || ! -x $NOCTALIA_ROOTFS/usr/bin/noctalia ]]; then
+  printf 'error: installed rootfs is not usable: %s\n' "$NOCTALIA_ROOTFS" >&2
+  printf '  re-run install-noctalia-termux.sh\n' >&2
+  exit 1
+fi
+if [[ ! -e $NOCTALIA_LOADER ]]; then
+  printf 'error: Termux glibc loader not found at %s\n' "$NOCTALIA_LOADER" >&2
+  printf '  re-run install-noctalia-termux.sh\n' >&2
+  exit 1
+fi
 
 clear_foreign_env
-ensure_private_runtime
 
-native_dir="$PREFIX/libexec/mango-termux"
-libs_dir="$native_dir/rootfs-libs"
-egl_dir="$native_dir/egl_vendor.d"
-vulkan_dir="$native_dir/vulkan/icd.d"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export MESA_SHADER_CACHE_DIR="$XDG_CACHE_HOME/mesa_shader_cache_noctalia"
+export MESA_SHADER_CACHE_MAX_SIZE=256M
 
-rpath="$libs_dir:$PREFIX/glibc/lib:$rootfs/usr/lib:$rootfs/lib"
-for dir in "$rootfs/usr/lib/aarch64-linux-gnu" \
-           "$rootfs/lib/aarch64-linux-gnu"; do
-  [[ -d $dir ]] && rpath="$rpath:$dir"
-done
-
-export __EGL_VENDOR_LIBRARY_DIRS="$egl_dir"
-unset __EGL_VENDOR_LIBRARY_FILENAMES
-export VK_ICD_FILENAMES="$vulkan_dir/freedreno_icd.aarch64.json"
-export VK_DRIVER_FILES="$VK_ICD_FILENAMES"
-if [[ -d "$rootfs/usr/lib/dri" ]]; then
-  export LIBGL_DRIVERS_PATH="$rootfs/usr/lib/dri"
+if [[ ${NOCTALIA_HAS_QT:-0} == 1 ]]; then
+  export QT_LOGGING_RULES="${NOCTALIA_QT_LOGGING:-*.debug=false}"
+  if [[ -n ${NOCTALIA_QML_CACHE:-} ]]; then
+    export QML_DISK_CACHE_PATH="$NOCTALIA_QML_CACHE"
+  fi
+  if [[ -n ${NOCTALIA_QML_IMPORT:-} ]]; then
+    export QML2_IMPORT_PATH="$NOCTALIA_QML_IMPORT"
+    export QML_IMPORT_PATH="$NOCTALIA_QML_IMPORT"
+  fi
+  if [[ -n ${NOCTALIA_QT_PLUGIN:-} ]]; then
+    export QT_PLUGIN_PATH="$NOCTALIA_QT_PLUGIN"
+  fi
+  if [[ -n ${NOCTALIA_QT_PLATFORM_PLUGIN:-} ]]; then
+    export QT_QPA_PLATFORM_PLUGIN_PATH="$NOCTALIA_QT_PLATFORM_PLUGIN"
+  fi
 fi
-if [[ -d "$rootfs/usr/lib/gbm" ]]; then
-  export GBM_BACKENDS_PATH="$rootfs/usr/lib/gbm"
+
+if [[ -d $PREFIX/etc/fonts ]]; then
+  export FONTCONFIG_PATH="$PREFIX/etc/fonts"
+fi
+
+export XDG_DATA_DIRS="$PREFIX/share:$NOCTALIA_ROOTFS/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+export XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$NOCTALIA_ROOTFS/etc/xdg${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}"
+export NOCTALIA_ASSETS_DIR
+
+export __EGL_VENDOR_LIBRARY_DIRS="$NOCTALIA_EGL_DIR"
+unset __EGL_VENDOR_LIBRARY_FILENAMES
+if [[ -n ${NOCTALIA_LIBGL_DRIVERS:-} ]]; then
+  export LIBGL_DRIVERS_PATH="$NOCTALIA_LIBGL_DRIVERS"
+fi
+if [[ -n ${NOCTALIA_GBM_BACKENDS:-} ]]; then
+  export GBM_BACKENDS_PATH="$NOCTALIA_GBM_BACKENDS"
 fi
 
 : "${WAYLAND_DISPLAY:=wayland-0}"
 : "${DISPLAY:=:0}"
 export WAYLAND_DISPLAY DISPLAY
-export XDG_CONFIG_HOME="$HOME/.config"
-export XDG_STATE_HOME="$HOME/.local/state"
-export XDG_DATA_HOME="$HOME/.local/share"
-XDG_DATA_DIRS="$(extend_paths "$PREFIX/share:$rootfs/usr/share" "${XDG_DATA_DIRS:-}")"
-XDG_CONFIG_DIRS="$(extend_paths "$PREFIX/etc/xdg:$rootfs/etc/xdg" "${XDG_CONFIG_DIRS:-}")"
-export XDG_DATA_DIRS XDG_CONFIG_DIRS
-export NOCTALIA_ASSETS_DIR="$rootfs/usr/share/noctalia/assets"
-if [[ -d "$PREFIX/etc/fonts" ]]; then
-  export FONTCONFIG_PATH="$PREFIX/etc/fonts"
-fi
 
-if [[ -d "$rootfs/usr/lib/qt6/qml" ]]; then
-  export QML2_IMPORT_PATH="$rootfs/usr/lib/qt6/qml"
-  export QML_IMPORT_PATH="$QML2_IMPORT_PATH"
-fi
-if [[ -d "$rootfs/usr/lib/qt6/plugins" ]]; then
-  export QT_PLUGIN_PATH="$rootfs/usr/lib/qt6/plugins"
-fi
-if [[ -d "$rootfs/usr/lib/qt6/plugins/platforms" ]]; then
-  export QT_QPA_PLATFORM_PLUGIN_PATH="$rootfs/usr/lib/qt6/plugins/platforms"
-fi
-
-if [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} && -z ${NOCTALIA_DBUS_WRAPPED:-} ]]; then
+dbus_required=1
+case "${1:-}" in
+  --version|-v|--help|-h|msg) dbus_required=0 ;;
+esac
+if ((dbus_required)) &&
+   [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} && -z ${NOCTALIA_DBUS_WRAPPED:-} ]]; then
   if dbus_run="$(command -v dbus-run-session)"; then
-    self="${BASH_SOURCE[0]}"
-    if [[ $self != /* ]]; then
-      if [[ $self == */* ]]; then
-        self="$PWD/$self"
-      else
-        self="$(command -v -- "$self" || printf '%s' "$PWD/$self")"
-      fi
-    fi
+    self="$0"
+    case "$self" in
+      /*) ;;
+      */*) self="$PWD/$self" ;;
+      *) self="$PREFIX/bin/$self" ;;
+    esac
     export NOCTALIA_DBUS_WRAPPED=1
     exec "$dbus_run" -- "$self" "$@"
   fi
 fi
 
-if [[ "${NOCTALIA_DIRECT_LOADER:-1}" != "0" ]]; then
-  exec "$loader" --library-path "$rpath" "$rootfs/usr/bin/noctalia" "$@"
+launch_noctalia() {
+  if [[ "${NOCTALIA_DIRECT_LOADER:-1}" != "0" ]]; then
+    exec "$NOCTALIA_LOADER" --library-path "$NOCTALIA_RPATH" \
+      "$NOCTALIA_ROOTFS/usr/bin/noctalia" "$@"
+  fi
+  if [[ ! -x $NOCTALIA_NATIVE_BIN ]]; then
+    printf 'error: patched fallback binary not found: %s\n' "$NOCTALIA_NATIVE_BIN" >&2
+    printf '  re-run install-noctalia-termux.sh\n' >&2
+    exit 1
+  fi
+  exec "$NOCTALIA_NATIVE_BIN" "$@"
+}
+
+if [[ $# -eq 0 ]] && command -v flock >/dev/null 2>&1; then
+  signature="${MANGO_INSTANCE_SIGNATURE:-}"
+  lock_file="$XDG_RUNTIME_DIR/noctalia-${signature##*/}.lock"
+  if [[ -d $XDG_RUNTIME_DIR && -w $XDG_RUNTIME_DIR ]] &&
+     [[ ! -d $lock_file ]] &&
+     ( : >>"$lock_file" ) 2>/dev/null; then
+    lock_launch() {
+      if ! flock -n 9; then
+        printf 'noctalia: another instance is already running\n'
+        exit 0
+      fi
+      launch_noctalia
+    }
+    if lock_launch 9>"$lock_file"; then
+      :
+    fi
+  fi
 fi
 
-native_bin="$native_dir/noctalia-native"
-if [[ ! -x $native_bin ]]; then
-  printf 'error: patched fallback binary not found: %s\n' "$native_bin" >&2
-  printf '  re-run install-noctalia-termux.sh without NOCTALIA_DIRECT_LOADER=0\n' >&2
-  exit 1
-fi
-exec "$native_bin" "$@"
-LAUNCHER_EOF
+launch_noctalia "$@"
+LAUNCHER_BODY
+  } >"$out"
 }
 
 install_launchers() {
-  local template tmp bin_noctalia bin_mango
+  local tmp bin_noctalia bin_mango
   bin_noctalia="$PREFIX/bin/noctalia"
   bin_mango="$PREFIX/bin/mango-noctalia"
 
-  template="$(launcher_template)"
-  template="${template//__PREFIX__/$PREFIX}"
-  template="${template//__ROOTFS__/$ROOTFS}"
-  template="${template//__HOME__/$HOME}"
-
   mkdir -p "$PREFIX/bin" "$TMPDIR"
   tmp="$(mktemp "$TMPDIR/install-noctalia.XXXXXX")"
-  printf '%s\n' "$template" >"$tmp"
+  emit_launcher "$tmp"
   chmod 0755 "$tmp"
 
   if [[ (-e $bin_noctalia || -L $bin_noctalia) &&
@@ -675,6 +697,15 @@ install_launchers() {
     die "installed Noctalia launchers differ: $bin_noctalia $bin_mango"
   info "installed launcher: $bin_noctalia"
   info "installed launcher: $bin_mango"
+}
+
+warm_caches() {
+  mkdir -p "$HOME/.cache/mesa_shader_cache_noctalia" \
+    "$HOME/.cache/noctalia/qmlcache" \
+    "$PREFIX/var/cache/noctalia" 2>/dev/null || true
+  if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -s >/dev/null 2>&1 || true
+  fi
 }
 
 backup_once() {
@@ -868,8 +899,7 @@ check_fail() {
 run_check() {
   check_failed=0
   local rootfs="$ROOTFS"
-  local rpath libstdcpp egl_lib vk_lib pattern entry
-  local -a matches=()
+  local runtime_env egl_lib vk_lib pattern entry
   local -a missing=()
 
   check_pass "rootfs: $rootfs"
@@ -913,9 +943,8 @@ run_check() {
   done
 
   for pattern in "${runtime_libs[@]}"; do
-    matches=()
-    mapfile -t matches < <(find_lib_paths "$pattern")
-    if ((${#matches[@]} == 0)); then
+    find_lib_paths "$pattern"
+    if ((${#FOUND_LIB_PATHS[@]} == 0)); then
       if required_lib "$pattern"; then
         check_fail "rootfs library missing: $pattern"
       else
@@ -923,7 +952,7 @@ run_check() {
       fi
       continue
     fi
-    for entry in "${matches[@]}"; do
+    for entry in "${FOUND_LIB_PATHS[@]}"; do
       if [[ -e "$libs_dir/${entry##*/}" ]]; then
         check_pass "private link: ${entry##*/}"
       else
@@ -986,22 +1015,20 @@ run_check() {
     check_fail "launchers are not byte-identical"
   fi
 
-  libstdcpp="$(readlink -f "$rootfs/usr/lib/libstdc++.so.6" 2>/dev/null || true)"
-  rpath="$(runtime_rpath)"
-  if [[ -e $loader && -n $libstdcpp && -x $rootfs/usr/bin/noctalia ]]; then
-    if command -v timeout >/dev/null 2>&1; then
-      if timeout 15 "$loader" --library-path "$rpath" \
-           "$rootfs/usr/bin/noctalia" --version >/dev/null 2>&1; then
-        check_pass "direct loader --version"
-      else
-        check_fail "direct loader --version failed or timed out"
-      fi
-    elif "$loader" --library-path "$rpath" \
-         "$rootfs/usr/bin/noctalia" --version >/dev/null 2>&1; then
-      check_pass "direct loader --version"
-    else
-      check_fail "direct loader --version failed"
-    fi
+  runtime_env="$priv_dir/runtime.env"
+  if [[ -f $runtime_env ]] &&
+     ( set +u; source "$runtime_env" 2>/dev/null;
+       [[ ${NOCTALIA_ROOTFS:-} == "$rootfs" ]] ); then
+    check_pass "runtime env matches rootfs: $runtime_env"
+  else
+    check_fail "runtime env missing or stale: $runtime_env"
+  fi
+
+  if [[ -f $PREFIX/bin/noctalia ]] &&
+     grep -Fq 'libexec/mango-termux/runtime.env' "$PREFIX/bin/noctalia"; then
+    check_pass "launcher sources precomputed runtime env"
+  else
+    check_fail "launcher does not use precomputed runtime env"
   fi
 
   if [[ -x $PREFIX/bin/mango-integrate ]]; then
@@ -1047,6 +1074,7 @@ fi
 
 setup_private_runtime
 build_patched_cache
+write_runtime_env
 
 if ((do_integrate)); then
   run_mango_integrate
@@ -1057,6 +1085,7 @@ migrate_walls_and_settings
 patch_start_shim
 patch_mics_config
 install_launchers
+warm_caches
 
 info "Noctalia is installed natively. Start it with: noctalia"
 info "Set NOCTALIA_DIRECT_LOADER=0 to use the patched fallback cache."
