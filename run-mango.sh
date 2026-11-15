@@ -176,7 +176,7 @@ if [[ "${1:-}" == "--restart" ]]; then
   shift
 fi
 
-: "${XDG_RUNTIME_DIR:=${TMPDIR:-/tmp}}"
+: "${XDG_RUNTIME_DIR:=${TMPDIR:-$prefix/tmp}}"
 export XDG_RUNTIME_DIR
 chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
@@ -213,7 +213,6 @@ persist_session_env() {
       DBUS_SESSION_BUS_ADDRESS \
       XCURSOR_THEME \
       XCURSOR_SIZE \
-      MANGO_INSTANCE_SIGNATURE \
       MANGO_TERMUX_RENDERER \
       MANGO_TERMUX_GPU \
       LD_LIBRARY_PATH \
@@ -266,6 +265,33 @@ cleanup_stale_wayland() {
     fi
   done
 }
+
+# Kill Noctalia instances left behind by a replaced compositor. Match the
+# process arguments (not the executable name) so both the rootfs binary and the
+# patched native fallback are caught; pkill -x would miss the loader wrapper.
+kill_leftover_noctalia() {
+  local pid
+  ps -eo pid=,args= 2>/dev/null |
+    grep -E '([/]usr/bin/noctalia|libexec[/]mango-termux/noctalia-native)' |
+    awk '{print $1}' |
+    while read -r pid; do
+      [[ "$pid" =~ ^[0-9]+$ ]] && kill "$pid" 2>/dev/null || true
+    done || true
+  for _ in $(seq 1 20); do
+    if ! ps -eo args= 2>/dev/null |
+       grep -Eq '([/]usr/bin/noctalia|libexec[/]mango-termux/noctalia-native)'; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  ps -eo pid=,args= 2>/dev/null |
+    grep -E '([/]usr/bin/noctalia|libexec[/]mango-termux/noctalia-native)' |
+    awk '{print $1}' |
+    while read -r pid; do
+      [[ "$pid" =~ ^[0-9]+$ ]] && kill -9 "$pid" 2>/dev/null || true
+    done || true
+}
+
 cleanup_stale_wayland
 
 # Return the IPC socket of a healthy running mango, if any. Dead sockets from
@@ -291,23 +317,76 @@ find_running_mango() {
 backend="${MANGO_BACKEND:-x11}"
 export WLR_BACKENDS="${WLR_BACKENDS:-$backend}"
 
-# Refresh Termux integration helpers non-fatally before touching the session.
-# mango-integrate also installs/migrates the native Noctalia launcher; Noctalia
-# runs directly in Termux and never needs proot or a host bridge.
-integrate=""
-if [[ -x "$prefix/bin/mango-integrate" ]]; then
-  integrate="$prefix/bin/mango-integrate"
-elif [[ -x "$script_dir/termux-compat/mango-integrate" ]]; then
-  integrate="$script_dir/termux-compat/mango-integrate"
-fi
-if [[ -n "$integrate" ]]; then
+# Integration stamp: skip the full Termux integration scan when its inputs are
+# unchanged. Keyed on mtime+size of the helpers and mics.conf, plus the mtime of
+# the applications directory.
+integration_stamp="$prefix/tmp/mango-integrate.stamp"
+
+integrate_fingerprint() {
+  local f meta
+  if ! command -v stat >/dev/null 2>&1; then
+    return 1
+  fi
+  for f in \
+    "$prefix/bin/mango-integrate" \
+    "$prefix/bin/mango-noctalia" \
+    "$prefix/bin/mango-firefox" \
+    "$HOME/.config/mango/mics.conf"; do
+    if [[ -e "$f" ]]; then
+      meta="$(stat -c '%Y:%s' "$f" 2>/dev/null || true)"
+      printf '%s %s\n' "$f" "${meta:-?}"
+    else
+      printf '%s missing\n' "$f"
+    fi
+  done
+  if [[ -d "$prefix/share/applications" ]]; then
+    meta="$(stat -c '%Y' "$prefix/share/applications" 2>/dev/null || true)"
+    printf '%s %s\n' "$prefix/share/applications" "${meta:-?}"
+  else
+    printf '%s missing\n' "$prefix/share/applications"
+  fi
+}
+
+# Refresh Termux integration helpers non-fatally. mango-integrate also
+# installs/migrates the native Noctalia launcher; Noctalia runs directly in
+# Termux and never needs proot or a host bridge. Called only for a new session,
+# and skipped when the stamp matches unchanged inputs or integrations are off.
+run_integration() {
+  local integrate current stored
+  integrate=""
+  if [[ -x "$prefix/bin/mango-integrate" ]]; then
+    integrate="$prefix/bin/mango-integrate"
+  elif [[ -x "$script_dir/termux-compat/mango-integrate" ]]; then
+    integrate="$script_dir/termux-compat/mango-integrate"
+  fi
+  [[ -n "$integrate" ]] || return 0
+  if [[ "${MANGO_SKIP_INTEGRATIONS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  current="$(integrate_fingerprint 2>/dev/null || true)"
+  stored=""
+  if [[ -r "$integration_stamp" ]]; then
+    stored="$(cat "$integration_stamp" 2>/dev/null || true)"
+  fi
+  if [[ -n "$current" && "$current" == "$stored" ]]; then
+    return 0
+  fi
+
   if [[ -x "$prefix/bin/mango-noctalia" ]]; then
     echo "Refreshing Termux integrations (native Noctalia, no proot) ..." >&2
   fi
   if ! "$integrate" --quiet; then
     echo "warning: $integrate failed; continuing with existing integration." >&2
+    return 0
   fi
-fi
+
+  current="$(integrate_fingerprint 2>/dev/null || true)"
+  if [[ -n "$current" ]]; then
+    mkdir -p "$prefix/tmp" 2>/dev/null || true
+    printf '%s\n' "$current" >"$integration_stamp" 2>/dev/null || true
+  fi
+}
 
 # Reuse a compositor that survived the Termux app restart instead of starting
 # a second instance on the same X display.
@@ -331,13 +410,23 @@ if ipc="$(find_running_mango)"; then
   fi
 fi
 
+# On --restart, clear any Noctalia left over from the replaced compositor
+# before starting a new session, so panels do not duplicate.
+if [[ "${MANGO_RESTART:-0}" == "1" ]]; then
+  kill_leftover_noctalia
+fi
+
+# Integrate before starting a new session. On --restart this runs after the old
+# compositor has exited; an already-running mango returns above.
+run_integration
+
 display="${MANGO_X11_DISPLAY:-${DISPLAY:-:0}}"
 export DISPLAY="$display"
 num="${display#:}"
 num="${num%%.*}"
-sockdir="${TMPDIR:-/tmp}/.X11-unix"
+sockdir="${TMPDIR:-$prefix/tmp}/.X11-unix"
 sock="$sockdir/X${num}"
-lockdir="${TMPDIR:-/tmp}"
+lockdir="${TMPDIR:-$prefix/tmp}"
 lock="$lockdir/.X${num}-lock"
 x11_log="$lockdir/termux-x11.log"
 
