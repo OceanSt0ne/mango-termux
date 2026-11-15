@@ -29,7 +29,9 @@ Options:
   --check             Read-only validation; no files are created or changed
   --no-integrate      Do not run mango-integrate
   --bootstrap-rootfs  Install archlinuxarm and Noctalia with proot-distro when
-                      no usable rootfs exists (requires network)
+                      no usable rootfs exists (requires network). This is the
+                      default when no rootfs is found.
+  --no-bootstrap      Fail instead of bootstrapping when no rootfs is found
   --quiet             Suppress normal output
   -h, --help          Show this help
 
@@ -46,7 +48,7 @@ quiet=0
 force=0
 check_only=0
 do_integrate=1
-bootstrap=0
+bootstrap=auto
 rootfs_arg=""
 
 die() {
@@ -91,6 +93,10 @@ while (($#)); do
       bootstrap=1
       shift
       ;;
+    --no-bootstrap)
+      bootstrap=0
+      shift
+      ;;
     --quiet)
       quiet=1
       shift
@@ -113,7 +119,7 @@ if (($#)); then
   die "unexpected argument: $1"
 fi
 
-if ((check_only && bootstrap)); then
+if ((check_only)) && [[ $bootstrap == 1 ]]; then
   die "--check cannot be combined with --bootstrap-rootfs"
 fi
 
@@ -284,10 +290,19 @@ resolve_runtime_rootfs() {
 
 bootstrap_rootfs() {
   command -v proot-distro >/dev/null 2>&1 ||
-    die "proot-distro is required by --bootstrap-rootfs"
-  info "Installing archlinuxarm with proot-distro..."
-  proot-distro install archlinuxarm ||
-    die "proot-distro install archlinuxarm failed"
+    die "proot-distro is required for automatic rootfs bootstrap"
+  local installed=0
+  if [[ -d "$PREFIX/var/lib/proot-distro/installed-rootfs/archlinuxarm" ||
+        -d "$PREFIX/var/lib/proot-distro/containers/archlinuxarm" ]]; then
+    installed=1
+  fi
+  if ((installed)); then
+    info "archlinuxarm rootfs already exists; repairing Noctalia package..."
+  else
+    info "Installing archlinuxarm with proot-distro..."
+    proot-distro install archlinuxarm ||
+      die "proot-distro install archlinuxarm failed"
+  fi
   info "Installing Noctalia in archlinuxarm..."
   proot-distro login archlinuxarm -- \
     bash -lc 'pacman -Syu --noconfirm && pacman -S --needed --noconfirm noctalia' ||
@@ -1050,13 +1065,16 @@ if ! resolve_runtime_rootfs; then
   if ((check_only)); then
     exit 1
   fi
-  if ((bootstrap)); then
-    bootstrap_rootfs
-    if ! resolve_runtime_rootfs; then
-      die "no usable Noctalia rootfs found after bootstrap"
-    fi
-  else
+  if [[ $bootstrap == 0 ]]; then
     die "no usable Noctalia rootfs found; use --rootfs PATH or --bootstrap-rootfs"
+  fi
+  if [[ -n $rootfs_arg || -n ${NOCTALIA_ROOTFS:-} ]]; then
+    die "the requested rootfs is not usable; refusing automatic bootstrap"
+  fi
+  info "No usable rootfs found; starting automatic bootstrap."
+  bootstrap_rootfs
+  if ! resolve_runtime_rootfs; then
+    die "no usable Noctalia rootfs found after bootstrap"
   fi
 fi
 
