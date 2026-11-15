@@ -17,6 +17,12 @@
 > It runs inside Termux:X11 without PRoot.
 >
 > **Optional Noctalia integration:** [English](TERMUX_NOCTALIA.md) | [Russian](TERMUX_NOCTALIA_ru.md).
+>
+> **Hardware requirement:** this build targets Qualcomm Snapdragon devices with an Adreno GPU only. MediaTek, Exynos, Tensor, and other SoCs are not supported.
+>
+> **Graphics driver disclaimer:** this project substitutes the session graphics stack with its own Freedreno/KGSL Mesa 27 build under `$PREFIX/opt/mesa-kgsl`; it may download and extract third-party `.deb` packages. It does not replace the stock Termux Mesa packages, but Mango and configured clients use the private drivers.
+>
+> **Use at your own risk:** the authors and maintainers are not responsible for device damage, data loss, boot problems, overheating, instability, or any other damage caused by installing or using this project. Back up your data first.
 
 ---
 
