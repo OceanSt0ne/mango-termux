@@ -420,8 +420,9 @@ grun --shell vkmark
 - `mango-integrate` идемпотентен: восстанавливает терминальные `.desktop`-файлы
   до обычного `Exec=kitty`/`Exec=foot`, ставит прямой launcher Firefox,
   устанавливает нативный launcher Noctalia, переносит конфигурацию Noctalia,
-  делает однократные резервные копии и создаёт shell-конфиги kitty/foot/ghostty
-  только если их нет.
+  копирует недостающие обои из `root/Walls` в `$HOME/Walls`, исправляет пути
+  `/root/` в настройках, делает однократные резервные копии и создаёт
+  shell-конфиги kitty/foot/ghostty только если их нет.
 - Поддерживаемые терминалы: kitty, kitty-open, foot, footclient, foot-server и
   ghostty. Их `.desktop`-файлы получают обычный `Exec=kitty`, `Exec=foot` и т. п.
   без `/usr/bin/env` и без очистки `LD_*`.
@@ -892,19 +893,27 @@ grun --shell vkmark
   `$PREFIX/libexec/mango-termux/noctalia-native` пропатченную копию через
   `patchelf`: интерпретатор Termux glibc
   `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`, RPATH
-  `$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib` и закреплённый rootfs
-  `libstdc++`. Загрузчик из rootfs падает с Android seccomp SIGSYS; патченная
-  копия переживает и повторный self-reexec Noctalia.
-- Noctalia и её дочерние процессы не получают `LD_LIBRARY_PATH`, `LD_PRELOAD`
-  или переменные Mesa/EGL. Дочерние процессы используют `HOME`, `PREFIX`,
-  `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` (с
-  откатом на bash), нативные XDG config/state/data и конфиги из `$HOME/.config`.
+  `$PREFIX/libexec/mango-termux/rootfs-libs:$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib`
+  (плюс существующие multiarch-каталоги) и закреплённый rootfs `libstdc++`.
+  Загрузчик из rootfs падает с Android seccomp SIGSYS; патченная копия переживает
+  и повторный self-reexec Noctalia.
+- `rootfs-libs` — приватный набор симлинков на rootfs Mesa 27 (`libgbm`,
+  `libgallium`, `libLLVM`, `libxml2.so.16`) плюс приватный `egl_vendor.d` и
+  Vulkan ICD. Это не даёт выбрать устаревшую Termux-glibc Mesa 24.2.6 с
+  `libxml2.so.2`, исправляет `eglGetDisplay` и не требует глобального симлинка
+  или изменений rootfs.
+- Noctalia не получает `LD_LIBRARY_PATH` или `LD_PRELOAD`. Ей задаются только
+  EGL/Vulkan/DRI-переменные (`__EGL_VENDOR_LIBRARY_DIRS`, `VK_ICD_FILENAMES`,
+  `VK_DRIVER_FILES`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`); дочерние
+  процессы используют `HOME`, `PREFIX`, `PATH=$PREFIX/bin:/system/bin:/system/xbin`,
+  `SHELL=$PREFIX/bin/fish` (с откатом на bash), нативные XDG config/state/data и
+  конфиги из `$HOME/.config`.
 - Ресурсное окружение:
   `XDG_DATA_DIRS="$PREFIX/share:$ROOTFS/usr/share"`,
   `XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$ROOTFS/etc/xdg"`,
   `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, нативный
-  `FONTCONFIG_PATH=$PREFIX/etc/fonts`; путь к rootfs можно переопределить через
-  `NOCTALIA_ROOTFS`.
+  `FONTCONFIG_PATH=$PREFIX/etc/fonts`, приватные rootfs EGL/Vulkan/DRI-пути; путь
+  к rootfs можно переопределить через `NOCTALIA_ROOTFS`.
 - D-Bus наследуется от сессии или запускается через `dbus-run-session`.
 - `mango-integrate` устанавливает нативный launcher, сохраняет старый proot-proxy
   как `noctalia.proot-bak`, переносит `root/.config/noctalia`,
@@ -913,6 +922,10 @@ grun --shell vkmark
 - Автозапуск: `mango-integrate` меняет `~/.config/mango/mics.conf` на
   `exec=noctalia` и переписывает proot-скрипт `start-noctalia.sh` как нативный
   shim с резервными копиями `.mango-bak`.
+- Он также копирует недостающие файлы `root/Walls` в `$HOME/Walls` и заменяет
+  `/root/` на нативный home в `~/.local/state/noctalia/settings.toml` и
+  `~/.config/noctalia/settings.toml`, поэтому предупреждение о старом пути к
+  обоям исчезает.
 - `mango-integrate --check` проверяет нативную Noctalia и отсутствие удалённого
   host-моста в терминальных записях.
 - `TERMUX_NOCTALIA.md` и `TERMUX_NOCTALIA_ru.md` — устаревшие proot/debug
@@ -1027,6 +1040,13 @@ DISPLAY=:0 mango-x11-check; echo $?
   `$ROOTFS/usr/lib/libstdc++.so.6`. Загрузчик из rootfs завершается с Android
   seccomp SIGSYS, поэтому запускайте `noctalia`/`mango-noctalia`, а не rootfs
   loader напрямую.
+- Ошибка EGL/`libxml2.so.2` в нативной Noctalia: проверьте, что
+  `$PREFIX/libexec/mango-termux/egl_vendor.d/50_mesa.json` указывает на rootfs
+  `libEGL_mesa.so.0`, а `$PREFIX/libexec/mango-termux/rootfs-libs/libgbm.so.1` —
+  на rootfs Mesa 27, затем повторите `mango-integrate`/`noctalia`; не создавайте
+  глобальный симлинк `libxml2.so.2`.
+- Предупреждение `/root/Walls`: повторно запустите `mango-integrate`; он скопирует
+  обои в `$HOME/Walls` и исправит `/root/` в нативных настройках Noctalia.
 - Проверка нативной Noctalia: `mango-integrate --check`, `mango-termux --restart`
   и `noctalia --version`; рабочая конфигурация не запускает процесс proot.
 - Нет GPU-эффектов: проверьте, что конфигурация включает эффекты, что существует

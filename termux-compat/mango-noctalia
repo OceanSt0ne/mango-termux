@@ -12,8 +12,8 @@ SHELL=$PREFIX/bin/fish
 clear_foreign_env() {
 	unset LD_LIBRARY_PATH LD_PRELOAD LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH \
 		MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER VK_DRIVER_FILES \
-		VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_FILENAMES FD_KGSL_DMABUF \
-		EGL_PLATFORM
+		VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_DIRS \
+		__EGL_VENDOR_LIBRARY_FILENAMES FD_KGSL_DMABUF EGL_PLATFORM
 	local name
 	while IFS= read -r name; do
 		unset "$name"
@@ -65,6 +65,39 @@ libstdcpp=$(readlink -f "$libstdcpp")
 native_dir=$PREFIX/libexec/mango-termux
 native_bin=$native_dir/noctalia-native
 native_stamp=$native_bin.rootfs
+rootfs_lib_dir=$native_dir/rootfs-libs
+egl_vendor_dir=$native_dir/egl_vendor.d
+vulkan_icd_dir=$native_dir/vulkan/icd.d
+
+ensure_rootfs_runtime() {
+	mkdir -p "$rootfs_lib_dir" "$egl_vendor_dir" "$vulkan_icd_dir"
+	local lib dir
+	for lib in libEGL_mesa.so.0 libgallium-27.0.0-arch1.92.so \
+		libLLVM.so.23.1 libgbm.so.1 libxml2.so.16 libstdc++.so.6 \
+		libgcc_s.so.1 libz.so.1 libzstd.so.1 libffi.so.8 \
+		libSPIRV-Tools.so libsensors.so.5 libicuuc.so.78 \
+		libicudata.so.78 libedit.so.0 libncursesw.so.6 \
+		libwayland-client.so.0 libwayland-server.so.0 libwayland-egl.so.1 \
+		libexpat.so.1 libdrm.so.2 libdisplay-info.so.2 libudev.so.1 \
+		libvulkan_freedreno.so; do
+		for dir in "$rootfs/usr/lib" "$rootfs/usr/lib/aarch64-linux-gnu"; do
+			if [[ -e "$dir/$lib" ]]; then
+				ln -sfn "$dir/$lib" "$rootfs_lib_dir/$lib"
+				break
+			fi
+		done
+	done
+	printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s/usr/lib/libEGL_mesa.so.0"}}\n' \
+		"$rootfs" >"$egl_vendor_dir/50_mesa.json"
+	printf '{"file_format_version":"1.0.0","ICD":{"library_path":"%s/usr/lib/libvulkan_freedreno.so"}}\n' \
+		"$rootfs" >"$vulkan_icd_dir/freedreno_icd.aarch64.json"
+}
+
+ensure_rootfs_runtime
+rootfs_rpath=$rootfs_lib_dir:$PREFIX/glibc/lib:$rootfs/usr/lib:$rootfs/lib
+for dir in "$rootfs/usr/lib/aarch64-linux-gnu" "$rootfs/lib/aarch64-linux-gnu"; do
+	[[ -d "$dir" ]] && rootfs_rpath=$rootfs_rpath:$dir
+done
 
 ensure_native_binary() {
 	if ! command -v patchelf >/dev/null 2>&1; then
@@ -76,7 +109,8 @@ ensure_native_binary() {
 		[[ $(<"$native_stamp") == "$rootfs" ]] &&
 		[[ $native_bin -nt $rootfs/usr/bin/noctalia ]] &&
 		[[ $native_bin -nt $libstdcpp ]] &&
-		[[ $native_bin -nt $loader ]]; then
+		[[ $native_bin -nt $loader ]] &&
+		[[ $native_bin -nt ${BASH_SOURCE[0]} ]]; then
 		return 0
 	fi
 	mkdir -p "$native_dir"
@@ -89,7 +123,7 @@ ensure_native_binary() {
 	fi
 	chmod 0755 "$tmp"
 	if ! patchelf --set-interpreter "$loader" --force-rpath \
-		--set-rpath "$PREFIX/glibc/lib:$rootfs/usr/lib:$rootfs/lib" "$tmp"; then
+		--set-rpath "$rootfs_rpath" "$tmp"; then
 		rm -f "$tmp"
 		echo "error: patchelf failed to prepare the native Noctalia binary" >&2
 		exit 1
@@ -114,6 +148,17 @@ fi
 
 export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH SHELL
 clear_foreign_env
+
+export __EGL_VENDOR_LIBRARY_DIRS=$egl_vendor_dir
+unset __EGL_VENDOR_LIBRARY_FILENAMES
+export VK_ICD_FILENAMES=$vulkan_icd_dir/freedreno_icd.aarch64.json
+export VK_DRIVER_FILES=$VK_ICD_FILENAMES
+if [[ -d $rootfs/usr/lib/dri ]]; then
+	export LIBGL_DRIVERS_PATH=$rootfs/usr/lib/dri
+fi
+if [[ -d $rootfs/usr/lib/gbm ]]; then
+	export GBM_BACKENDS_PATH=$rootfs/usr/lib/gbm
+fi
 
 : "${WAYLAND_DISPLAY:=wayland-0}"
 : "${DISPLAY:=:0}"

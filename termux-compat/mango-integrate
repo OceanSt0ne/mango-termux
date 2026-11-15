@@ -604,6 +604,56 @@ migrate_native_noctalia() {
 	done
 }
 
+migrate_noctalia_walls() {
+	[[ -n "$noctalia_rootfs" ]] || return 0
+
+	local src="$noctalia_rootfs/root/Walls"
+	local dst="$home/Walls"
+	local file base tmp
+
+	if [[ -d "$src" ]]; then
+		mkdir -p "$dst"
+		while IFS= read -r -d '' file; do
+			base=${file##*/}
+			[[ -e "$dst/$base" ]] && continue
+			if ! cp -a "$file" "$dst/$base" 2>/dev/null; then
+				warn "cannot copy Noctalia wallpaper: $file"
+			else
+				info "copied Noctalia wallpaper: $dst/$base"
+			fi
+		done < <(find "$src" -maxdepth 1 -type f -print0 2>/dev/null)
+	fi
+
+	for file in "$home/.local/state/noctalia/settings.toml" \
+		"$home/.config/noctalia/settings.toml"; do
+		[[ -f "$file" ]] || continue
+		grep -q '/root/' "$file" || continue
+		if ! backup_once "$file"; then
+			continue
+		fi
+		tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+			warn "cannot create temporary file for: $file"
+			continue
+		}
+		if ! sed "s#/root/#$home/#g" "$file" >"$tmp" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot rewrite Noctalia paths: $file"
+			continue
+		fi
+		if cmp -s "$file" "$tmp"; then
+			rm -f "$tmp"
+			continue
+		fi
+		set_mode_from "$file" "$tmp"
+		if ! mv "$tmp" "$file" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot replace: $file"
+			continue
+		fi
+		info "migrated Noctalia /root paths: $file"
+	done
+}
+
 patch_mics_config() {
 	local file="$home/.config/mango/mics.conf"
 	local tmp
@@ -881,6 +931,7 @@ fi
 remove_legacy_host_bridge
 install_native_noctalia
 migrate_native_noctalia
+migrate_noctalia_walls
 patch_mics_config
 patch_start_noctalia_shim
 
