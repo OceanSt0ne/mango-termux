@@ -26,6 +26,51 @@
 
 ---
 
+## Contents
+
+- [1. Overview](#1-overview)
+  - [What this repository is](#what-this-repository-is)
+  - [Architecture at a glance](#architecture-at-a-glance)
+  - [Known limitations](#known-limitations)
+- [2. Port Changes & Fixes](#2-port-changes--fixes)
+  - [Build system and Termux adaptation](#build-system-and-termux-adaptation)
+  - [Backends and launcher](#backends-and-launcher)
+  - [Rendering: AHardwareBuffer and scenefx](#rendering-ahardwarebuffer-and-scenefx)
+  - [Rendering: Mesa Zink + Turnip](#rendering-mesa-zink--turnip)
+  - [Session GPU and Xwayland on KGSL](#session-gpu-and-xwayland-on-kgsl)
+  - [Performance: release builds and frame-done backpressure](#performance-release-builds-and-frame-done-backpressure)
+  - [Config migration](#config-migration)
+  - [Benchmark fixes](#benchmark-fixes)
+  - [Helper scripts and documentation](#helper-scripts-and-documentation)
+  - [Universal default integrations](#universal-default-integrations)
+- [3. Requirements & Build](#3-requirements--build)
+  - [Prerequisites](#prerequisites)
+  - [Termux packages](#termux-packages)
+  - [Freedreno/KGSL Mesa 27](#freedrenokgsl-mesa-27)
+  - [Optional patched wlroots 0.20](#optional-patched-wlroots-020)
+  - [Automated build](#automated-build)
+  - [Manual build](#manual-build)
+  - [Verify installation](#verify-installation)
+- [4. Usage & Configuration](#4-usage--configuration)
+  - [Quick start](#quick-start)
+  - [Launcher behavior](#launcher-behavior)
+  - [Environment variables](#environment-variables)
+  - [Examples](#examples)
+  - [Restart and autostart](#restart-and-autostart)
+  - [Configuration files and migration](#configuration-files-and-migration)
+  - [Effects](#effects)
+  - [Firefox and WebGL](#firefox-and-webgl)
+  - [Keybindings](#keybindings)
+  - [Nested Xwayland and child environment](#nested-xwayland-and-child-environment)
+  - [Benchmarks](#benchmarks)
+  - [Native Noctalia without proot](#native-noctalia-without-proot)
+- [5. Troubleshooting](#5-troubleshooting)
+  - [Renderer diagnostics: Turnip/KGSL vs llvmpipe](#renderer-diagnostics-turnipkgsl-vs-llvmpipe)
+  - [FPS measurements and vkmark](#fps-measurements-and-vkmark)
+  - [Wayland and X11 sockets](#wayland-and-x11-sockets)
+  - [Common errors](#common-errors)
+  - [Rebuild](#rebuild)
+
 ## 1. Overview
 
 ### What this repository is
