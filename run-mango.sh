@@ -17,6 +17,8 @@
 #   MANGO_TERMUX_RENDERER  turnip (default) = Mesa Zink + Turnip,
 #                          ahb = Android EGL/AHardwareBuffer, pixman = software
 #   MANGO_TERMUX_GPU       compatibility: 1 = ahb, 0 = pixman, turnip/zink = turnip
+#   MANGO_XWAYLAND_GLAMOR  1 = opt into the DRI3/glamor Xwayland server; default
+#                          0 = stable no-glamor server with indirect GLX
 #   MANGO_RESTART          1 = stop a running mango before starting a new one
 set -euo pipefail
 
@@ -66,12 +68,55 @@ export ELECTRON_OZONE_PLATFORM_HINT XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
 
 priv_bin="$prefix/lib/mango-termux/mango"
 
-# Xwayland on the KGSL GPU: use the patched server when it is installed.
-# Its wrapper selects the private Mesa build (Zink on Turnip) and DRI3 over
-# /dev/kgsl-3d0; the stock Termux Xwayland has no DRI3 and falls back to
-# llvmpipe for every X11 client.
-if [[ -z "${WLR_XWAYLAND:-}" && -x "$prefix/opt/xwayland-kgsl/bin/Xwayland" ]]; then
-  export WLR_XWAYLAND="$prefix/opt/xwayland-kgsl/bin/Xwayland"
+# Xwayland on Android: DRI3/DRM ioctls can abort the X socket with
+# "fatal IO error 25" when an X11 GL client probes the patched KGSL server.
+# Default to a stable no-glamor server with indirect GLX and DRI3 disabled for
+# clients. Set MANGO_XWAYLAND_GLAMOR=1 to opt back into the DRI3 server.
+xwayland_glamor="${MANGO_XWAYLAND_GLAMOR:-0}"
+export MANGO_XWAYLAND_GLAMOR="$xwayland_glamor"
+if [[ "$xwayland_glamor" == "1" ]]; then
+  unset XWAYLAND_NO_GLAMOR
+  export LIBGL_DRI3_DISABLE=0
+  if [[ -z "${WLR_XWAYLAND:-}" && -x "$prefix/opt/xwayland-kgsl/bin/Xwayland" ]]; then
+    export WLR_XWAYLAND="$prefix/opt/xwayland-kgsl/bin/Xwayland"
+  fi
+else
+  export XWAYLAND_NO_GLAMOR=1
+  : "${LIBGL_DRI3_DISABLE:=1}"
+  export LIBGL_DRI3_DISABLE
+
+  xwayland_wrapper="$prefix/tmp/mango-xwayland"
+  xwayland_real="${WLR_XWAYLAND:-}"
+  if [[ -z "$xwayland_real" ]]; then
+    if [[ -x "$prefix/opt/xwayland-kgsl/bin/Xwayland.real" ]]; then
+      xwayland_real="$prefix/opt/xwayland-kgsl/bin/Xwayland.real"
+    elif [[ -x "$prefix/opt/xwayland-kgsl/bin/Xwayland" ]]; then
+      xwayland_real="$prefix/opt/xwayland-kgsl/bin/Xwayland"
+    elif [[ -x "$prefix/bin/Xwayland" ]]; then
+      xwayland_real="$prefix/bin/Xwayland"
+    else
+      xwayland_real="$(command -v Xwayland 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -n "$xwayland_real" && "$xwayland_real" != "$xwayland_wrapper" ]]; then
+    mkdir -p "$prefix/tmp"
+    xwayland_tmp="$(mktemp "$prefix/tmp/.mango-xwayland.XXXXXX")"
+    {
+      printf '#!/data/data/com.termux/files/usr/bin/bash\n'
+      printf 'real=%q\n' "$xwayland_real"
+      printf 'export XWAYLAND_NO_GLAMOR=1\n'
+      printf 'export LIBGL_DRI3_DISABLE=1\n'
+      printf 'exec "$real" "$@" +iglx -shm\n'
+    } >"$xwayland_tmp"
+    chmod 0755 "$xwayland_tmp"
+    if [[ -f "$xwayland_wrapper" ]] && cmp -s "$xwayland_tmp" "$xwayland_wrapper"; then
+      rm -f "$xwayland_tmp"
+    else
+      mv -f "$xwayland_tmp" "$xwayland_wrapper"
+      chmod 0755 "$xwayland_wrapper"
+    fi
+    export WLR_XWAYLAND="$xwayland_wrapper"
+  fi
 fi
 
 # Pick the renderer before the binary: the Turnip path needs Termux Mesa
@@ -223,7 +268,10 @@ persist_session_env() {
       __EGL_VENDOR_LIBRARY_FILENAMES \
       VK_DRIVER_FILES \
       VK_ICD_FILENAMES \
-      FD_KGSL_DMABUF; do
+      FD_KGSL_DMABUF \
+      MANGO_XWAYLAND_GLAMOR \
+      XWAYLAND_NO_GLAMOR \
+      LIBGL_DRI3_DISABLE; do
       if [[ -n "${!var:-}" ]]; then
         printf 'export %s=%q\n' "$var" "${!var}"
       fi
