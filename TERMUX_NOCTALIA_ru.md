@@ -1,5 +1,60 @@
 [English](TERMUX_NOCTALIA.md) | [Русский](TERMUX_NOCTALIA_ru.md)
 
+## Содержание
+
+- [0. Быстрый старт](#0-быстрый-старт)
+  - [0.1 Что настраивает это руководство](#01-что-настраивает-это-руководство)
+  - [0.2 Быстрый путь](#02-быстрый-путь)
+- [1. Требования](#1-требования)
+  - [1.1 Termux и MangoWM](#11-termux-и-mangowm)
+  - [1.2 Arch rootfs и Noctalia](#12-arch-rootfs-и-noctalia)
+  - [1.3 Нативные инструменты](#13-нативные-инструменты)
+  - [1.4 Автоматический установщик](#14-автоматический-установщик)
+- [2. Установка Noctalia в rootfs](#2-установка-noctalia-в-rootfs)
+  - [2.1 Подготовка rootfs](#21-подготовка-rootfs)
+  - [2.2 Пакет Noctalia](#22-пакет-noctalia)
+  - [2.3 Mesa 27 и KGSL](#23-mesa-27-и-kgsl)
+- [3. Архитектура нативного запуска](#3-архитектура-нативного-запуска)
+  - [3.1 Обнаружение rootfs](#31-обнаружение-rootfs)
+  - [3.2 Прямой нативный запуск](#32-прямой-нативный-запуск)
+  - [3.3 Окружение выполнения](#33-окружение-выполнения)
+- [4. Графика и ресурсы](#4-графика-и-ресурсы)
+  - [4.1 Mesa 27 и EGL vendor](#41-mesa-27-и-egl-vendor)
+  - [4.2 libxml2 и multiarch](#42-libxml2-и-multiarch)
+  - [4.3 Vulkan и DRI](#43-vulkan-и-dri)
+  - [4.4 Замечание о QML и Qt](#44-замечание-о-qml-и-qt)
+  - [4.5 Шрифты, ресурсы и пути XDG](#45-шрифты-ресурсы-и-пути-xdg)
+- [5. Интеграция с MangoWM](#5-интеграция-с-mangowm)
+  - [5.1 mango-ipc](#51-mango-ipc)
+  - [5.2 Layer-shell и панели](#52-layer-shell-и-панели)
+  - [5.3 Автозапуск и привязки клавиш](#53-автозапуск-и-привязки-клавиш)
+- [6. Конфигурация и миграция](#6-конфигурация-и-миграция)
+  - [6.1 Сборка и интеграция](#61-сборка-и-интеграция)
+  - [6.2 Конфигурация, состояние и обои](#62-конфигурация-состояние-и-обои)
+  - [6.3 Ручная проверка лаунчера](#63-ручная-проверка-лаунчера)
+- [7. Проверка](#7-проверка)
+  - [7.1 Дерево процессов и окружение](#71-дерево-процессов-и-окружение)
+  - [7.2 EGL и рендерер](#72-egl-и-рендерер)
+  - [7.3 IPC и рабочие пространства](#73-ipc-и-рабочие-пространства)
+- [8. Нативные дочерние приложения](#8-нативные-дочерние-приложения)
+  - [8.1 Desktop-записи](#81-desktop-записи)
+  - [8.2 fish и терминалы](#82-fish-и-терминалы)
+  - [8.3 Firefox](#83-firefox)
+- [9. Устранение неполадок](#9-устранение-неполадок)
+  - [9.1 Noctalia не запускается](#91-noctalia-не-запускается)
+  - [9.2 EGL, libxml2 и eglGetDisplay](#92-egl-libxml2-и-eglgetdisplay)
+  - [9.3 Предупреждение об обоях /root/Walls](#93-предупреждение-об-обоях-rootwalls)
+  - [9.4 mango-ipc не используется](#94-mango-ipc-не-используется)
+  - [9.5 Wayland и D-Bus](#95-wayland-и-d-bus)
+  - [9.6 llvmpipe или чёрный экран](#96-llvmpipe-или-чёрный-экран)
+  - [9.7 Нативные приложения не отображаются](#97-нативные-приложения-не-отображаются)
+  - [9.8 Ручное восстановление](#98-ручное-восстановление)
+- [10. Обновление и удаление](#10-обновление-и-удаление)
+  - [10.1 Обновление](#101-обновление)
+  - [10.2 Сброс нативного состояния](#102-сброс-нативного-состояния)
+  - [10.3 Удаление](#103-удаление)
+- [11. Справочник по окружению](#11-справочник-по-окружению)
+
 # Noctalia в Termux + MangoWM (нативно, без proot)
 
 ## 0. Быстрый старт
@@ -113,6 +168,62 @@ Termux, а не D-Bus Arch. Если сессионная шина уже при
 наследует `DBUS_SESSION_BUS_ADDRESS`; иначе лаунчер повторно запускает себя под
 `dbus-run-session`.
 
+### 1.4 Автоматический установщик
+
+В корне репозитория есть автономный исполняемый установщик
+`install-noctalia-termux.sh`. Он использует прямой загрузчик из rootfs по
+умолчанию и не запускает `proot` во время выполнения.
+
+Установщик автоматически находит rootfs: сначала `--rootfs`, затем
+`NOCTALIA_ROOTFS`, затем раскладки `proot-distro`. Установщик проверяет
+`patchelf`; `proot-distro`, `curl` и `wget` опциональны, кроме режима
+бутстрапа. Прямой запуск идёт через glibc-загрузчик Termux. Проверьте окружение
+без изменений:
+
+```sh
+./install-noctalia-termux.sh --check
+```
+
+Запустите установку и интеграцию по умолчанию:
+
+```sh
+./install-noctalia-termux.sh
+```
+
+Пересоберите приватную среду выполнения и замените лаунчеры для выбранного
+rootfs:
+
+```sh
+./install-noctalia-termux.sh --rootfs /path/to/rootfs --force
+```
+
+Если пригодного rootfs нет, установите Arch Linux ARM и Noctalia через
+`proot-distro`; `proot-distro` используется только для подготовки, никогда во
+время выполнения:
+
+```sh
+./install-noctalia-termux.sh --bootstrap-rootfs
+```
+
+Флаги включают `--check` (пробный запуск только для чтения), `--force`
+(пересборка), `--bootstrap-rootfs` (установка Arch и Noctalia через
+`proot-distro` только для настройки), `--no-integrate` (пропустить
+`mango-integrate`) и `--quiet`.
+
+Установщик создаёт приватную совместимость Mesa 27, EGL, Vulkan и `libxml2` в
+`$PREFIX/libexec/mango-termux`; глобальный `libxml2.so.2` никогда не создаётся.
+Он записывает `$PREFIX/bin/noctalia` и `$PREFIX/bin/mango-noctalia` одинаково,
+чтобы проверка интеграции проходила, а старый прокси сохраняется с суффиксом
+`.proot-bak`. Пути QML и Qt экспортируются только при их наличии; в текущей
+Noctalia 5.4.1 нет Qt или QML.
+
+Установщик переносит конфигурацию, состояние и обои, переписывает `/root/`,
+патчит `mics.conf` и старый шим `start-noctalia`. Нативные дочерние процессы
+остаются Bionic с нативным `$HOME/.config`; утечки `LD_*` и `PROOT_*`
+отсутствуют. Повторно запускайте установщик после обновления rootfs или
+репозитория; `build-termux.sh` запускает его после интеграции, когда rootfs
+существует.
+
 ## 2. Установка Noctalia в rootfs
 
 ### 2.1 Подготовка rootfs
@@ -182,49 +293,58 @@ Rootfs — только источник бинарников и ресурсо�
 `proot-distro` для запуска Noctalia, и во время выполнения не запускается ни
 один процесс rootfs.
 
-### 3.2 Пропатченный нативный бинарник
+### 3.2 Прямой нативный запуск
 
-Лаунчер копирует ELF-файл из rootfs в
-`$PREFIX/libexec/mango-termux/noctalia-native` и патчит эту копию с помощью
+Установленный лаунчер `$PREFIX/bin/noctalia` по умолчанию запускает ELF-файл из
+rootfs напрямую через glibc-загрузчик Termux:
+
+`"$PREFIX/glibc/lib/ld-linux-aarch64.so.1" --library-path "$RPATH" "$ROOTFS/usr/bin/noctalia" "$@"`.
+
+`RPATH` равен
+`$PREFIX/libexec/mango-termux/rootfs-libs:$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib`,
+а существующие `$ROOTFS/usr/lib/aarch64-linux-gnu` и
+`$ROOTFS/lib/aarch64-linux-gnu` добавляются в конец. Перед `exec` лаунчер
+подготавливает `NOCTALIA_ASSETS_DIR`, XDG-пути, приватные манифесты EGL/Vulkan и
+чистое окружение, поэтому бинарник rootfs работает как нативный процесс
+Termux без `proot`.
+
+Установщик также создаёт резервную копию `noctalia-native` и патчит её через
 `patchelf`:
 
 - интерпретатор: `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`;
-- RPATH:
-  `$PREFIX/libexec/mango-termux/rootfs-libs:$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib`;
-- дополнительные записи RPATH при наличии:
-  `$ROOTFS/usr/lib/aarch64-linux-gnu` и
-  `$ROOTFS/lib/aarch64-linux-gnu`;
+- RPATH: тот же приватный/rootfs-путь, что и у прямого загрузчика;
 - запись `NEEDED` `libstdc++.so.6` заменена абсолютным путём к
   `libstdc++.so.6` в rootfs.
 
-Результат — постоянный эквивалент запуска ELF-файла через
-`ld-linux --library-path`. Проверьте установленную копию:
+Задайте `NOCTALIA_DIRECT_LOADER=0`, чтобы использовать этот резервный вариант.
+Проверьте пропатченную копию:
 
 ```sh
 patchelf --print-interpreter "$PREFIX/libexec/mango-termux/noctalia-native"
 patchelf --print-rpath "$PREFIX/libexec/mango-termux/noctalia-native"
 ```
 
-Прямое выполнение через загрузчик rootfs не используется. Android seccomp
-убивает запуск Arch glibc сигналом `SIGSYS` на `set_robust_list`. Пропатченная
-копия использует загрузчик glibc из Termux и также переживает self-reexec
-Noctalia.
+Используется загрузчик glibc Termux, а не загрузчик rootfs. Android seccomp
+убивает запуск Arch glibc сигналом `SIGSYS` на `set_robust_list`, поэтому
+загрузчик rootfs напрямую не выполняется. Резервная копия также переживает
+self-reexec Noctalia.
 
-Приватная копия кэшируется. Она пересобирается, когда бинарник `noctalia` в
-rootfs, `libstdc++.so.6` в rootfs, загрузчик Termux или обёртка `mango-noctalia`
-новее кэшированного бинарника, либо когда меняется выбранный rootfs.
+Резервный кэш пересобирается, когда бинарник `noctalia` в rootfs,
+`libstdc++.so.6` в rootfs, загрузчик Termux или установщик новее кэшированного
+бинарника, либо когда меняется выбранный rootfs.
 
 Noctalia 5.4.1 — единый ELF-файл. Отдельного процесса quickshell, `qs` или QML
 нет, и у бинарника нет библиотек Qt в `NEEDED`. Поэтому лаунчер запускает один
-процесс, `noctalia-native`, а не дерево среды выполнения QML.
+процесс, `noctalia` (или `noctalia-native` в резервном режиме), а не дерево
+среды выполнения QML.
 
 ### 3.3 Окружение выполнения
 
-Когда нативная копия готова, лаунчер выполняет её в контролируемом окружении.
+Лаунчер выполняет прямой бинарник rootfs в контролируемом окружении.
 Прочитайте окружение работающего процесса:
 
 ```sh
-pid=$(pgrep -f 'libexec/mango-termux/noctalia-native' | head -1)
+pid=$(pgrep -f '/usr/bin/noctalia|libexec/mango-termux/noctalia-native' | head -1)
 tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(HOME|PREFIX|PATH|SHELL|XDG_|WAYLAND|DBUS|MANGO|LD_|__EGL|VK_|LIBGL|GBM)'
 ```
 
@@ -233,10 +353,10 @@ tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(HOME|PREFIX|PATH|SHELL|XDG_|WAY
 вызывает `clear_foreign_env`, который удаляет переменные `LD_*`, Mesa, EGL,
 Vulkan и `PROOT_*`, и применяет приватные пути rootfs.
 
-`LD_LIBRARY_PATH` и `LD_PRELOAD` не экспортируются. Noctalia находит свои
-библиотеки через пропатченный RPATH и приватные символические ссылки rootfs.
-Лаунчер также не запускает процесс proot, поэтому в окружении Noctalia нет
-переменных `PROOT_*`.
+`LD_LIBRARY_PATH` и `LD_PRELOAD` не экспортируются. В прямом режиме Noctalia
+находит библиотеки через `--library-path` загрузчика и приватные символические
+ссылки rootfs; резервный режим использует пропатченный RPATH. Лаунчер также не
+запускает процесс proot, поэтому в окружении Noctalia нет переменных `PROOT_*`.
 
 Нативные дочерние процессы наследуют `HOME`, `PREFIX`,
 `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` с запасным
@@ -307,18 +427,17 @@ KGSL Gallium. `GBM_BACKENDS_PATH` задаётся как `$ROOTFS/usr/lib/gbm`,
 
 ### 4.4 Замечание о QML и Qt
 
-Текущий лаунчер не задаёт переменные QML или Qt, поскольку в Noctalia 5.4.1 нет
-компонента Qt или QML. Нет процесса `quickshell`, `qs` или QML для запуска, и у
-ELF-файла нет библиотек Qt в `NEEDED`. Не экспортируются `QML2_IMPORT_PATH`,
-`QML_IMPORT_PATH`, `QT_PLUGIN_PATH` или `QT_QPA_PLATFORM_PLUGIN_PATH`.
+В Noctalia 5.4.1 нет компонента Qt или QML. Нет процесса `quickshell`, `qs` или
+QML для запуска, и у ELF-файла нет библиотек Qt в `NEEDED`. Поэтому установщик
+задаёт `QML2_IMPORT_PATH`, `QML_IMPORT_PATH`, `QT_PLUGIN_PATH` и
+`QT_QPA_PLATFORM_PLUGIN_PATH` только при наличии соответствующих каталогов Qt 6
+в rootfs. С текущим пакетом эти переменные отсутствуют и ни на что не влияют.
 
-Если будущая сборка Noctalia или Quickshell будет использовать Qt,
-соответствующие значения были бы такими:
+Значения для будущей сборки Noctalia или Quickshell на Qt:
 `QML2_IMPORT_PATH="$ROOTFS/usr/lib/qt6/qml"`, `QML_IMPORT_PATH` с тем же
 значением, `QT_PLUGIN_PATH="$ROOTFS/usr/lib/qt6/plugins"` и
 `QT_QPA_PLATFORM_PLUGIN_PATH="$ROOTFS/usr/lib/qt6/plugins/platforms"`. Это
-гипотетические значения для будущей сборки, а не переменные, задаваемые текущим
-лаунчером.
+задел на будущее, а не требование текущего бинарника.
 
 ### 4.5 Шрифты, ресурсы и пути XDG
 
@@ -411,11 +530,12 @@ grep -n 'noctalia msg' ~/.config/mango/binds.conf
 "$PREFIX/bin/mango-integrate" --check
 ```
 
-`build-termux.sh` устанавливает `mango-noctalia` и запускает `mango-integrate`.
-`MANGO_SKIP_INTEGRATIONS=1` пропускает этап интеграции.
-`MANGO_SKIP_FIREFOX_FIX=1` передаёт `--no-firefox` помощнику интеграции. На
-этапе сборки rootfs необязателен; при следующем запуске MangoWM применяется
-интеграция Noctalia, когда rootfs становится доступен.
+`build-termux.sh` устанавливает `mango-noctalia`, запускает `mango-integrate`, а
+затем запускает `install-noctalia-termux.sh --quiet --no-integrate`, если
+доступен пригодный rootfs. `MANGO_SKIP_INTEGRATIONS=1` пропускает этап
+интеграции и установщик. `MANGO_SKIP_FIREFOX_FIX=1` передаёт `--no-firefox`
+помощнику интеграции. На этапе сборки rootfs необязателен; при следующем запуске
+MangoWM применяется интеграция Noctalia, когда rootfs становится доступен.
 
 `mango-integrate --check` работает только на чтение. Он возвращает ноль, когда
 обёртки, нативный лаунчер Noctalia, записи Firefox, лаунчер Firefox и записи
@@ -456,10 +576,10 @@ grep -R '/root/' ~/.local/state/noctalia ~/.config/noctalia 2>/dev/null || true
 "$PREFIX/bin/noctalia" --version
 ```
 
-Ожидаемый вывод — `noctalia v5.4.1`. Команда подготавливает или повторно
-использует приватный нативный бинарник и сообщает версию Noctalia. Команды IPC,
-такие как `noctalia msg`, требуют работающей сессии и правильных
-`XDG_RUNTIME_DIR` и `WAYLAND_DISPLAY`.
+Ожидаемый вывод — `noctalia v5.4.1`. Команда по умолчанию использует прямой
+загрузчик rootfs и сообщает версию Noctalia; задайте `NOCTALIA_DIRECT_LOADER=0`,
+чтобы проверить резервную копию. Команды IPC, такие как `noctalia msg`, требуют
+работающей сессии и правильных `XDG_RUNTIME_DIR` и `WAYLAND_DISPLAY`.
 
 ## 7. Проверка
 
@@ -471,13 +591,15 @@ grep -R '/root/' ~/.local/state/noctalia ~/.config/noctalia 2>/dev/null || true
 ps -A -o pid,stat,comm,args | grep -E 'mango|noctalia|proot'
 ```
 
-Ожидаемое дерево — `mango -> dbus-run-session -> noctalia-native`. Этап
-`dbus-run-session` появляется, когда сессионная шина не была унаследована.
-Процесс `proot` или `proot-distro` отсутствует.
+Ожидаемое дерево — `mango -> dbus-run-session -> noctalia` в прямом режиме или
+`... -> noctalia-native` при `NOCTALIA_DIRECT_LOADER=0`. Этап `dbus-run-session`
+появляется, когда сессионная шина не была унаследована. Процесс `proot` или
+`proot-distro` отсутствует.
 
-Имя процесса Noctalia — `noctalia-native`. Остановите его командой
-`pkill -f 'libexec/mango-termux/noctalia-native'`. Не используйте
-`pkill -x noctalia`; точное имя процесса — `noctalia-native`.
+Остановите нативный процесс командой
+`pkill -f '/usr/bin/noctalia|libexec/mango-termux/noctalia-native'`. Не
+полагайтесь на `pkill -x noctalia`: имя резервного процесса —
+`noctalia-native`.
 
 Прочитайте `/proc/<pid>/environ` работающего процесса. В нём не должно быть
 `LD_LIBRARY_PATH` или `LD_PRELOAD`. Раздел 3.3 показывает запрос окружения.
@@ -588,7 +710,8 @@ ls -l "$PREFIX/bin/noctalia" "$PREFIX/bin/mango-noctalia" "$PREFIX/libexec/mango
 
 Сообщение `noctalia: already running` означает, что существующий экземпляр
 Noctalia владеет конечной точкой IPC. Остановите нативный процесс командой
-`pkill -f 'libexec/mango-termux/noctalia-native'` и перезапустите сессию.
+`pkill -f '/usr/bin/noctalia|libexec/mango-termux/noctalia-native'` и
+перезапустите сессию.
 
 ### 9.2 EGL, libxml2 и eglGetDisplay
 
@@ -603,13 +726,14 @@ rm -rf "$PREFIX/libexec/mango-termux"
 
 Манифест должен указывать на абсолютный путь к `libEGL_mesa.so.0` в rootfs, а
 ссылка GBM должна разрешаться внутри rootfs. Удаление
-`$PREFIX/libexec/mango-termux` удаляет кэшированный нативный бинарник,
-символические ссылки и манифесты; следующий запуск `noctalia` пересоздаст их.
+`$PREFIX/libexec/mango-termux` удаляет резервный бинарник, символические ссылки
+и манифесты; следующий запуск `noctalia` пересоздаст их.
 
-Не создавайте глобальный `libxml2.so.2` и не изменяйте rootfs. Если журнал
-по-прежнему сообщает `eglGetDisplay failed` или запрашивает `libxml2.so.2`,
-приватный кэш устарел или в rootfs отсутствует Mesa 27; пересоберите кэш и
-проверьте раздел 2.3.
+Не создавайте глобальный `libxml2.so.2` и не изменяйте rootfs. Установщик
+создаёт только приватную совместимость `rootfs-libs/libxml2.so.2`, если в rootfs
+есть `libxml2.so.16`. Если журнал по-прежнему сообщает `eglGetDisplay failed`
+или запрашивает `libxml2.so.2`, приватная среда устарела или в rootfs нет Mesa
+27; пересоберите среду и проверьте раздел 2.3.
 
 ### 9.3 Предупреждение об обоях /root/Walls
 
@@ -633,7 +757,7 @@ ls -l ~/Walls
 Проверьте, унаследовал ли работающий процесс подпись MangoWM:
 
 ```sh
-pid=$(pgrep -f 'libexec/mango-termux/noctalia-native' | head -1)
+pid=$(pgrep -f '/usr/bin/noctalia|libexec/mango-termux/noctalia-native' | head -1)
 tr '\0' '\n' < "/proc/$pid/environ" | grep MANGO_INSTANCE_SIGNATURE
 ```
 
@@ -700,13 +824,13 @@ Termux не могут появиться в лаунчере. Если прил
 
 ```sh
 rm -rf "$PREFIX/libexec/mango-termux"
-"$PREFIX/bin/mango-integrate"
+./install-noctalia-termux.sh
 mango-termux --restart
 ```
 
-Это удаляет кэшированный нативный бинарник, приватные библиотеки, манифест EGL и
-ICD Vulkan. Следующий запуск пересоздаст их из обнаруженного rootfs. Не трогайте
-rootfs; он остаётся источником ELF-файла и ресурсов.
+Это удаляет резервный бинарник, приватные библиотеки, манифест EGL и ICD Vulkan.
+Установщик пересоздаст их из обнаруженного rootfs. Не трогайте rootfs; он
+остаётся источником ELF-файла и ресурсов.
 
 ## 10. Обновление и удаление
 
@@ -716,7 +840,7 @@ rootfs; он остаётся источником ELF-файла и ресур�
 
 ```sh
 proot-distro login archlinuxarm -- pacman -Syu --noconfirm
-"$PREFIX/bin/mango-integrate"
+./install-noctalia-termux.sh
 mango-termux --restart
 ```
 
@@ -757,8 +881,8 @@ rm -rf "$PREFIX/libexec/mango-termux"
 ## 11. Справочник по окружению
 
 Нативный лаунчер и путь автозапуска используют следующие значения. Пути в этом
-списке — действующие значения после того, как `mango-noctalia` применит своё
-окружение.
+списке — действующие значения после того, как лаунчер, созданный установщиком,
+применит своё окружение.
 
 - `NOCTALIA_ROOTFS` — необязательное явное переопределение rootfs. Если не
   задано, лаунчер ищет в `installed-rootfs/*` и `containers/*/rootfs`.
@@ -795,18 +919,20 @@ rm -rf "$PREFIX/libexec/mango-termux"
 - `MANGO_INSTANCE_SIGNATURE` — наследуется от MangoWM. Включает бэкенд рабочих
   пространств `mango-ipc`. Он не задаётся лаунчером Noctalia и не является
   proot-bind.
-- `MANGO_NOCTALIA_DBUS_WRAPPED` — внутренний флаг, устанавливаемый в `1` во
-  время повторного запуска через `dbus-run-session` для предотвращения
-  рекурсии.
+- `NOCTALIA_DBUS_WRAPPED` — внутренний флаг, устанавливаемый в `1` во время
+  повторного запуска через `dbus-run-session` для предотвращения рекурсии.
+- `NOCTALIA_DIRECT_LOADER` — `1` по умолчанию (ELF-файл rootfs через загрузчик
+  Termux); `0` включает резервный пропатченный кэш.
 - `NOCTALIA_GPU` — удалён и не читается. Лаунчер его не задаёт.
 
 Лаунчер очищает `LD_LIBRARY_PATH`, `LD_PRELOAD`,
 `MESA_LOADER_DRIVER_OVERRIDE`, `GALLIUM_DRIVER`,
 `__EGL_VENDOR_LIBRARY_FILENAMES`, `EGL_PLATFORM`, `FD_KGSL_DMABUF` и все
 переменные `PROOT_*`. Он не экспортирует `LD_LIBRARY_PATH` или `LD_PRELOAD`.
-Разрешение библиотек опирается на пропатченный RPATH и приватный каталог
-`rootfs-libs`.
+Прямой режим разрешает библиотеки через `--library-path` загрузчика; резервный
+использует пропатченный RPATH и приватный каталог `rootfs-libs`.
 
-Переменные QML и Qt не задаются. Текущий бинарник Noctalia 5.4.1 не имеет
-компонента Qt или QML. Гипотетические значения в разделе 4.4 относятся только к
-будущей сборке Quickshell или Qt.
+Переменные QML и Qt экспортируются только при наличии соответствующих каталогов
+Qt 6 в rootfs. Текущий бинарник Noctalia 5.4.1 не имеет компонента Qt или QML,
+поэтому они отсутствуют и ни на что не влияют. Значения из раздела 4.4 относятся
+только к будущей сборке Quickshell или Qt.
