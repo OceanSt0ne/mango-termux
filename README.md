@@ -86,13 +86,14 @@ Optional Noctalia runs natively in Termux without proot; the Arch rootfs is only
 - No DRM, libinput, session, systemd, or udev requirement.
 - Default launcher path: Mesa Zink + Turnip (Freedreno Vulkan), rendering into CPU-mappable Android AHardwareBuffers, presented to Termux:X11 through SHM because Termux:X11 has no usable DRI3 DRM fd.
 - Fallback: Android system EGL + AHardwareBuffer (Adreno), then pixman.
-- Session clients and nested Xwayland use the private Mesa 27 native Freedreno/KGSL path where `$PREFIX/opt/mesa-kgsl` and `$PREFIX/opt/xwayland-kgsl` are installed.
+- Session clients use the private Mesa 27 native Freedreno/KGSL path where `$PREFIX/opt/mesa-kgsl` is installed. Nested Xwayland defaults to a stable no-glamor server with DRI3 disabled for clients; the patched KGSL/DRI3 server at `$PREFIX/opt/xwayland-kgsl` is used only with `MANGO_XWAYLAND_GLAMOR=1`.
 - Configs live under `$PREFIX/etc/mango`; user configs in `~/.config/mango`.
 
 ### Known limitations
 
 - No DRM/libinput/session backends and no `chvt`/VT switching.
 - Termux:X11 lacks a DRI3 DRM fd, so the output path is AHB + SHM; the AHB→SHM copy, padded AHB stride, and explicit GPU synchronization can limit presentation at high resolution.
+- Nested Xwayland defaults to a stable no-glamor server with DRI3 disabled for clients; hardware GLX requires `MANGO_XWAYLAND_GLAMOR=1` and the patched KGSL server, and may be unstable.
 - Turnip/Zink adds Vulkan translation overhead; AHB can be faster on some workloads.
 - Apps launched from an outer shell with `DISPLAY=:0` open in Termux:X11, not inside mango; launch them inside mango or through `mango-termux -s`.
 - High `vkmark` FPS does not mean the X11 presentation path is free of copies or Present stalls.
@@ -136,7 +137,7 @@ Optional Noctalia runs natively in Termux without proot; the Arch rootfs is only
   - the X11 path pre-interns `_NET_WM_NAME`, `UTF8_STRING`, `_VARIABLE_REFRESH`, `WM_PROTOCOLS`, `WM_DELETE_WINDOW` on a throwaway X connection to avoid harmless `BadAtom`/`ChangeProperty` errors;
   - keeps a secondary headless backend available.
 - `run-mango.sh` / installed `$PREFIX/bin/mango-termux`:
-  - resolves its own path and `PREFIX`; uses `$PREFIX/opt/xwayland-kgsl/bin/Xwayland` when present unless `WLR_XWAYLAND` is set;
+  - defaults to a stable no-glamor Xwayland wrapper at `$PREFIX/tmp/mango-xwayland` with `XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1`, and Xwayland arguments `+iglx -shm`; `MANGO_XWAYLAND_GLAMOR=1` opts into the DRI3/glamor KGSL server at `$PREFIX/opt/xwayland-kgsl/bin/Xwayland` for hardware GLX, and `WLR_XWAYLAND` still overrides the server path;
   - renderer precedence: `MANGO_TERMUX_RENDERER` first, then compatibility `MANGO_TERMUX_GPU` (`0` → pixman, `1`/`ahb` → ahb, `turnip`/`zink` → turnip), otherwise turnip;
   - Turnip mode exports private Mesa 27 variables (`LD_LIBRARY_PATH`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`, `__EGL_VENDOR_LIBRARY_FILENAMES`, `MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) for session children and uses the private Freedreno ICD when present; `termux/zink.c` scopes Zink and Vulkan variables to mango's own renderer creation;
   - if `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so` is absent, warns and unsets the private Mesa/KGSL variables rather than leaking a stale override;
@@ -195,21 +196,21 @@ Optional Noctalia runs natively in Termux without proot; the Arch rootfs is only
 ### Session GPU and Xwayland on KGSL
 
 - The session and child clients use private Mesa 27 native Freedreno/KGSL (`MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`) and report `FD735`.
-- Stock Termux Xwayland is built with `-Dglamor=false`, so nested X11 clients fall back to llvmpipe. The port uses `$PREFIX/opt/xwayland-kgsl/bin/Xwayland` when installed:
-  - glamor/DRI3 over `/dev/kgsl-3d0` without `/dev/dri` or `wl_drm`;
-  - the Xwayland server starts with private Mesa 27 Zink/Turnip (`MESA_LOADER_DRIVER_OVERRIDE=zink`, `GALLIUM_DRIVER=zink`, `FD_KGSL_DMABUF=1`);
-  - X11 clients inherit native Mesa 27 KGSL, not global Zink;
-  - KGSL buffers are exported as `DRM_FORMAT_MOD_LINEAR` so mango can import them instead of showing black windows;
-  - stock server backup is `$PREFIX/bin/Xwayland.stock`; wrapper is `$PREFIX/bin/Xwayland`; override with `WLR_XWAYLAND`.
+- Stock Termux Xwayland is built with `-Dglamor=false`. The nested server now defaults to a stable no-glamor wrapper at `$PREFIX/tmp/mango-xwayland`, not the patched DRI3 server.
+- The default wrapper exports `XWAYLAND_NO_GLAMOR=1` and `LIBGL_DRI3_DISABLE=1`, and runs the real server with `+iglx -shm`. This prevents DRI3/DRM ioctl failures (`os_same_file_description` / `XIO fatal IO error 25`) from killing `:1`.
+- `MANGO_XWAYLAND_GLAMOR=1` opts back into the patched `$PREFIX/opt/xwayland-kgsl/bin/Xwayland` DRI3/glamor KGSL server for hardware GLX; it may reintroduce the crashes. `WLR_XWAYLAND` still overrides the server path outright.
+- With the DRI3/glamor server, glamor uses `/dev/kgsl-3d0` without `/dev/dri` or `wl_drm`, the server starts with private Mesa 27 Zink/Turnip, and X11 clients inherit native Mesa 27 KGSL. KGSL buffers are exported as `DRM_FORMAT_MOD_LINEAR` so mango can import them instead of showing black windows.
+- Nested Xwayland is normally `:1` when the outer Termux:X11 display is `:0`; use `echo "$DISPLAY"` rather than hardcoding the display number.
 - Verify from a terminal inside mango:
 
 ```sh
-DISPLAY=:1 glxinfo -B | grep -E 'Accelerated|OpenGL renderer'
-# Accelerated: yes
-# OpenGL renderer string: FD735
+echo "$DISPLAY"
+glxinfo -b | grep -E 'direct rendering|OpenGL renderer'
+glinfo -b | grep -E 'direct rendering|OpenGL renderer'
 ```
 
-- One-off Zink diagnostic:
+- Neither `glxinfo -b` nor bionic `glinfo -b` should abort the X server. glibc `glinfo`/`glxinfo` may report no RGB GLX visual because glibc Mesa 24 lacks KGSL; that is a client-side visual limitation, not proof that Xwayland died. `LIBGL_DRI3_DISABLE` is a client-side Mesa hint, not the only switch: the no-glamor server setting and the `+iglx -shm` server arguments are equally important.
+- One-off Zink diagnostic, when a glibc GLX visual is available:
 
 ```sh
 MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink glxinfo -B
@@ -335,7 +336,7 @@ mango-termux --restart
 - No PRoot, systemd, udev, libinput, DRM session, or virtual terminal required.
 - `$PREFIX` is `/data/data/com.termux/files/usr` by default.
 - Required for hardware-accelerated session clients: Freedreno/KGSL Mesa 27 in `$PREFIX/opt/mesa-kgsl`. `build-termux.sh` installs it automatically when `/dev/kgsl-3d0` exists; see [Freedreno/KGSL Mesa 27](#freedrenokgsl-mesa-27). Stock Termux Mesa has no KGSL Gallium driver, so without it child GL clients fall back to llvmpipe.
-- Optional: patched Xwayland at `$PREFIX/opt/xwayland-kgsl` for DRI3/GLX acceleration of nested X11 clients. Without it, Xwayland clients use the stock path.
+- Optional: patched Xwayland at `$PREFIX/opt/xwayland-kgsl` for DRI3/GLX acceleration of nested X11 clients when `MANGO_XWAYLAND_GLAMOR=1` is set. The default stable no-glamor wrapper does not require it and keeps DRI3 disabled for clients.
 
 ### Termux packages
 
@@ -491,6 +492,7 @@ mango-termux
 - GPU detection prefers the private `$PREFIX/opt/mesa-kgsl`, then system `$PREFIX/lib/dri/kgsl_dri.so`, and the Freedreno ICD from the private tree or `$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`; if KGSL Gallium is absent but the ICD exists, it warns and uses stock Mesa instead of aborting.
 - Launches Noctalia via the native `mango-noctalia` copy with `XDG_DATA_DIRS="$PREFIX/share:$ROOTFS/usr/share"`, `XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$ROOTFS/etc/xdg"`, `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, native fontconfig, private rootfs EGL/Vulkan/DRI paths, and no exported `LD_LIBRARY_PATH`/`LD_PRELOAD`; D-Bus is inherited or started with `dbus-run-session`.
 - When a host bus exists, `src/main.c` adds PREFIX/TMPDIR/SHELL and the GUI variables to `dbus-update-activation-environment`.
+- Writes `$PREFIX/tmp/mango-xwayland` with `XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1`, and Xwayland arguments `+iglx -shm`; `MANGO_XWAYLAND_GLAMOR=1` switches to the patched DRI3/glamor KGSL server.
 - Exports nested Xwayland `DISPLAY` to children so X11 apps launched inside mango stay inside the nested session.
 - Unsets `LD_LIBRARY_PATH` before exec of the private AHB binary.
 
@@ -505,7 +507,10 @@ mango-termux
 | `MANGO_TERMUX_RENDERER` | `turnip` (default), `ahb`, or `pixman`. |
 | `MANGO_TERMUX_GPU` | Compatibility selector: `0` = pixman, `1`/`ahb` = ahb, `turnip`/`zink` = turnip. |
 | `MANGO_RESTART` | `1` stops a running instance before starting. |
-| `WLR_XWAYLAND` | Override the Xwayland server path. |
+| `WLR_XWAYLAND` | Override the Xwayland server path; also overrides the source used by the generated wrapper. |
+| `MANGO_XWAYLAND_GLAMOR` | `1` opts into the DRI3/glamor KGSL Xwayland server; default `0` uses the stable no-glamor wrapper. |
+| `XWAYLAND_NO_GLAMOR` | `1` in the default wrapper; disables Xwayland glamor. |
+| `LIBGL_DRI3_DISABLE` | `1` in the default wrapper; client-side Mesa hint that disables DRI3. |
 | `XDG_RUNTIME_DIR` | Wayland/IPC runtime directory; defaults to `$TMPDIR`. |
 | `PREFIX` | Termux prefix; default `/data/data/com.termux/files/usr`. |
 | `SCENEFX_DIR` | External scenefx source tree for the build. |
@@ -660,8 +665,11 @@ foot
 - On Termux:X11, the output has no DRI3 DRM fd. Mango renders into AHB and presents over SHM.
 - Turnip is the default via `mango-termux`; Zink/Vulkan variables are scoped to mango's renderer creation.
 - Child GL clients use private Mesa 27 native Freedreno/KGSL (`FD735`), not global Zink.
-- Nested Xwayland gives X11 clients DRI3 and native KGSL when the patched server is installed.
-- Apps launched from a shell with the outer `DISPLAY=:0` still open outside mango; launch them inside mango or with `mango-termux -s`.
+- Nested Xwayland defaults to the stable no-glamor wrapper at `$PREFIX/tmp/mango-xwayland` (`XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1`, server arguments `+iglx -shm`), which prevents DRI3/DRM ioctl failures from killing `:1`.
+- `MANGO_XWAYLAND_GLAMOR=1` opts into DRI3 and native KGSL hardware GLX through the patched server; this may reintroduce `os_same_file_description` / `XIO fatal IO error 25` crashes.
+- Nested Xwayland is normally `:1` when the outer Termux:X11 display is `:0`; check `echo "$DISPLAY"` instead of assuming the number.
+- X11 clients can still probe without killing the server with `glxinfo -b` or bionic `glinfo -b`; glibc `glinfo`/`glxinfo` may report no RGB GLX visual because glibc Mesa 24 lacks KGSL.
+- Apps launched from a shell with the outer `DISPLAY=:0` still open outside mango; launch them inside mango or with `mango-termux -s`. Inside mango, the inherited `DISPLAY` points at the nested Xwayland server.
 
 ### Benchmarks
 
@@ -697,13 +705,19 @@ grun --shell vkmark
 ### Renderer diagnostics: Turnip/KGSL vs llvmpipe
 
 - `FD735` means native Freedreno/KGSL for the session or X11 clients.
+- With the default no-glamor Xwayland wrapper, nested X11 clients do not get DRI3 or native KGSL; hardware GLX requires `MANGO_XWAYLAND_GLAMOR=1` and the patched KGSL server.
 - `zink Vulkan ... Turnip ...` means Zink/Turnip; expected for mango's own renderer or explicit diagnostics.
 - `llvmpipe` means software fallback. If mango's own renderer is Zink/Turnip but session clients report llvmpipe, install the private KGSL stack with `./termux-compat/install-freedreno-kgsl.sh` and restart the session.
-- Check X11 client acceleration from inside mango:
+- Check X11 client acceleration from inside mango after confirming the nested display:
 
 ```sh
-DISPLAY=:1 glxinfo -B | grep -E 'Accelerated|OpenGL renderer'
+echo "$DISPLAY"
+glxinfo -b | grep -E 'direct rendering|OpenGL renderer'
+glinfo -b | grep -E 'direct rendering|OpenGL renderer'
 ```
+
+- `glxinfo -b` and bionic `glinfo -b` must not abort the X server. A glibc `glinfo`/`glxinfo` "no RGB GLX visual" result is expected because glibc Mesa 24 lacks KGSL; it is not evidence that Xwayland crashed.
+- If `:1` exits with `os_same_file_description` or `XIO fatal IO error 25`, keep the default `MANGO_XWAYLAND_GLAMOR=0` and restart the session. `LIBGL_DRI3_DISABLE=1` is a client-side Mesa hint; the no-glamor server and `+iglx -shm` arguments are also required.
 
 - Check the Freedreno Vulkan ICD:
 
@@ -752,13 +766,15 @@ DISPLAY=:0 mango-x11-check; echo $?
 - `X11 error: op 18:0, code 5`: harmless `ChangeProperty`/atom error during X11 backend startup; the compositor pre-interns the relevant atoms.
 - `Failed to connect to Termux:X11`: open the Termux:X11 app, inspect `$TMPDIR/termux-x11.log`, and run `DISPLAY=:0 mango-x11-check; echo $?`.
 - X11 apps open on the outer Termux:X11 desktop: they inherited `DISPLAY=:0`. Start them from a terminal inside mango or use `mango-termux -s <app>`; rebuild with the current script so Xwayland is enabled for existing build dirs.
+- Nested `:1` dies with `os_same_file_description` / `XIO fatal IO error 25`: this is the DRI3/DRM ioctl failure that the default stable wrapper avoids. Check `echo "$DISPLAY"`, keep `MANGO_XWAYLAND_GLAMOR=0`, and restart `mango-termux` so `$PREFIX/tmp/mango-xwayland` is regenerated.
+- `glxinfo`/`glinfo` reports no RGB GLX visual: use `glxinfo -b` or bionic `glinfo -b` to confirm the server is still alive; glibc Mesa 24 lacks KGSL, so a glibc GLX visual may be unavailable even when Xwayland is healthy.
 - Black/empty screen: make sure the Termux:X11 app is open; launch `mango-termux -d` and inspect the log.
 - Slow rendering: lower the Termux:X11 resolution, disable animations/effects in `config.conf`, or try `MANGO_TERMUX_RENDERER=ahb` / `pixman` for comparison.
 - `couldn't create renderer`: verify scenefx was built with `scenefx-termux.patch`, installed under `$PREFIX`, and that the launcher uses the expected binary.
 - No GPU effects: check that the config enables effects, that `$PREFIX/opt/mesa-kgsl` exists (run `./termux-compat/install-freedreno-kgsl.sh`), and that `mesa-vulkan-icd-freedreno` is installed.
 - `vkmark` fails with assimp/Vulkan errors: run `termux-compat/install-benchmark-fixes.sh`; for Arch Turnip KGSL, run `termux-compat/build-arch-turnip.sh`.
 - `glibc-runner` picks up bionic Mesa: rerun the benchmark installer to patch `glibc-runner.sh`, or remove the bionic variables from the environment.
-- `error: no usable rootfs found`: install an Arch rootfs with `usr/bin/noctalia`, or set `NOCTALIA_ROOTFS`; `mango-noctalia` searches `installed-rootfs/*` and `containers/*/rootfs`.
+- `error: no usable rootfs found`: run `./install-noctalia-termux.sh`; with no flags it discovers a rootfs and automatically bootstraps archlinuxarm with `proot-distro` and pacman when none is usable (requires network). Use `--no-bootstrap` to fail instead. An explicit `--rootfs PATH` or `NOCTALIA_ROOTFS` still fails fast and never auto-bootstraps, and `--check` is read-only. `mango-noctalia` searches `installed-rootfs/*` and `containers/*/rootfs`.
 - `error: patchelf is required to prepare the native Noctalia binary`: run `pkg install patchelf`, then rerun `mango-noctalia` or `mango-integrate`.
 - `error: Termux glibc loader not found`: verify `$PREFIX/glibc/lib/ld-linux-aarch64.so.1` exists.
 - `error: rootfs libstdc++ not found`: the rootfs is incomplete; verify `$ROOTFS/usr/lib/libstdc++.so.6`. The rootfs loader aborts with Android seccomp `SIGSYS`, so run `noctalia`/`mango-noctalia`, not the rootfs loader directly.

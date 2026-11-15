@@ -175,29 +175,38 @@ Termux, а не D-Bus Arch. Если сессионная шина уже при
 умолчанию и не запускает `proot` во время выполнения.
 
 Установщик автоматически находит rootfs: сначала `--rootfs`, затем
-`NOCTALIA_ROOTFS`, затем раскладки `proot-distro`. Установщик проверяет
-`patchelf`; `proot-distro`, `curl` и `wget` опциональны, кроме режима
-бутстрапа. Прямой запуск идёт через glibc-загрузчик Termux. Проверьте окружение
-без изменений:
+`NOCTALIA_ROOTFS`, затем раскладки `proot-distro`. Если пригодного rootfs нет и
+явный путь не задан, `./install-noctalia-termux.sh` без флагов автоматически
+запускает bootstrap: `proot-distro install archlinuxarm`, затем `pacman -Syu` и
+`pacman -S --needed noctalia`. Для этого нужны сеть и `proot-distro`.
+`--no-bootstrap` отключает авто-bootstrap и завершает работу ошибкой, а
+`--bootstrap-rootfs` остаётся явным флагом. Явные `--rootfs PATH` или
+`NOCTALIA_ROOTFS` при непригодном пути по-прежнему завершаются ошибкой без
+автоустановки. `--check` только читает и никогда не выполняет bootstrap.
+Существующий `archlinuxarm` не переустанавливается, а ремонтируется повторным
+запуском `pacman`. Установщик проверяет `patchelf`; `proot-distro`, `curl` и
+`wget` опциональны, кроме режима бутстрапа. Прямой запуск идёт через
+glibc-загрузчик Termux. Проверьте окружение без изменений:
 
 ```sh
 ./install-noctalia-termux.sh --check
 ```
 
-Запустите установку и интеграцию по умолчанию:
+Запустите установку и интеграцию по умолчанию: без флагов установщик находит
+пригодный rootfs или автоматически запускает bootstrap, если rootfs нет:
 
 ```sh
 ./install-noctalia-termux.sh
 ```
 
 Пересоберите приватную среду выполнения и замените лаунчеры для выбранного
-rootfs:
+rootfs; явный путь не запускает авто-bootstrap:
 
 ```sh
 ./install-noctalia-termux.sh --rootfs /path/to/rootfs --force
 ```
 
-Если пригодного rootfs нет, установите Arch Linux ARM и Noctalia через
+Явный `--bootstrap-rootfs` устанавливает Arch Linux ARM и Noctalia через
 `proot-distro`; `proot-distro` используется только для подготовки, никогда во
 время выполнения:
 
@@ -205,9 +214,10 @@ rootfs:
 ./install-noctalia-termux.sh --bootstrap-rootfs
 ```
 
-Флаги включают `--check` (пробный запуск только для чтения), `--force`
-(пересборка), `--bootstrap-rootfs` (установка Arch и Noctalia через
-`proot-distro` только для настройки), `--no-integrate` (пропустить
+Флаги включают `--check` (пробный запуск только для чтения, без bootstrap),
+`--force` (пересборка), `--bootstrap-rootfs` (явная установка Arch и Noctalia
+через `proot-distro` только для настройки), `--no-bootstrap` (ошибка вместо
+автоустановки при отсутствии rootfs), `--no-integrate` (пропустить
 `mango-integrate`) и `--quiet`.
 
 Установщик создаёт приватную совместимость Mesa 27, EGL и `libxml2` в
@@ -382,6 +392,10 @@ Noctalia 5.4.1 — единый ELF-файл. Отдельного процес�
 процесс, `noctalia` (или `noctalia-native` в резервном режиме), а не дерево
 среды выполнения QML.
 
+Noctalia — Wayland-клиент вложенного композитора MangoWM, поэтому этот лаунчер
+не запускает и не настраивает Xwayland. X11-приложения в той же сессии
+используют сервер Xwayland сессии, описанный в разделе 3.3.
+
 ### 3.3 Окружение выполнения
 
 Лаунчер выполняет прямой бинарник rootfs в контролируемом окружении.
@@ -418,6 +432,19 @@ Noctalia нет Vulkan в `NEEDED`. Пути кэшей QML/Qt и `QT_LOGGING_RU
 `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` с запасным
 вариантом bash, а также нативные пути XDG для конфигурации, состояния и данных.
 Дочерние процессы Termux (bionic) игнорируют EGL-переменные для glibc.
+
+Вложенный Xwayland относится к сессии, а не к лаунчеру Noctalia. `run-mango.sh`
+по умолчанию использует стабильную обёртку `$PREFIX/tmp/mango-xwayland` без
+glamor: `XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1` и аргументы Xwayland
+`+iglx -shm`. Это предотвращает падение X-сервера `:1` из-за DRI3/DRM ioctl
+(`os_same_file_description` / `XIO fatal IO error 25`).
+`MANGO_XWAYLAND_GLAMOR=1` возвращает DRI3/glamor KGSL для аппаратного GLX и
+может вернуть падения. Вложенный Xwayland обычно `:1`, если внешний Termux:X11 —
+`:0`; проверяйте `echo "$DISPLAY"`, а не задавайте номер жёстко.
+`glxinfo -b` и bionic `glinfo -b` не должны ронять X-сервер; glibc
+`glinfo`/`glxinfo` могут сообщать об отсутствии RGB GLX visual, так как glibc
+Mesa 24 не поддерживает KGSL. `LIBGL_DRI3_DISABLE` — клиентская подсказка Mesa,
+не единственный переключатель.
 
 ## 4. Графика и ресурсы
 
@@ -711,7 +738,14 @@ grep -E 'gl initialized|connected compositor|workspace backend|connected to sess
 Также проверьте, что в журнале нет `eglGetDisplay failed`, запроса
 `libxml2.so.2` и предупреждения `/root/Walls`. Рендерер Freedreno указывает на
 путь Mesa/KGSL из rootfs; `llvmpipe` указывает на программный запасной вариант,
-описанный в разделе 9.6.
+описанный в разделе 9.6. Проверьте вложенный Xwayland отдельно через
+`echo "$DISPLAY"`, `glxinfo -b` и bionic `glinfo -b` из терминала внутри сессии.
+Ни одна из команд не должна ронять X-сервер. Результат glibc
+`glinfo`/`glxinfo` об отсутствии RGB GLX visual ожидаем, поскольку glibc Mesa 24
+не поддерживает KGSL; это не сбой Xwayland. При стабильной обёртке без glamor по
+умолчанию X11-клиенты не получают DRI3 или нативный KGSL;
+`MANGO_XWAYLAND_GLAMOR=1` включает DRI3/glamor KGSL для аппаратного GLX с риском
+падений `os_same_file_description` / `XIO fatal IO error 25`.
 
 ### 7.3 IPC и рабочие пространства
 
@@ -914,6 +948,18 @@ EGL. Если `/dev/kgsl-3d0` недоступен или в rootfs нет
 поверхность при `llvmpipe` в журнале указывает на проблему композитора или
 поверхности, а не на принудительный драйвер.
 
+Если `:1` исчезает с `os_same_file_description` или `XIO fatal IO error 25`,
+пропатченный DRI3/glamor Xwayland-сервер столкнулся с ошибкой DRI3/DRM ioctl.
+Оставьте `MANGO_XWAYLAND_GLAMOR=0` (по умолчанию), чтобы `run-mango.sh`
+использовал `$PREFIX/tmp/mango-xwayland` с `XWAYLAND_NO_GLAMOR=1`,
+`LIBGL_DRI3_DISABLE=1` и аргументами `+iglx -shm`, затем перезапустите
+`mango-termux`, чтобы обёртка была создана заново. Проверяйте
+`echo "$DISPLAY"`; вложенный Xwayland обычно `:1` при внешнем Termux:X11 `:0`,
+но не задавайте номер жёстко. `glxinfo -b` и bionic `glinfo -b` не должны
+ронять сервер; glibc `glinfo`/`glxinfo` могут сообщать об отсутствии RGB GLX
+visual, так как glibc Mesa 24 не поддерживает KGSL. `LIBGL_DRI3_DISABLE` —
+клиентская подсказка Mesa, не единственный переключатель.
+
 ### 9.7 Нативные приложения не отображаются
 
 Проверьте, что нативные приложения установлены в Termux:
@@ -926,7 +972,13 @@ Noctalia находит desktop-записи через
 `XDG_DATA_DIRS="$PREFIX/share:$ROOTFS/usr/share"`. Отсутствующие приложения
 Termux не могут появиться в лаунчере. Если приложения существуют, но их записи
 отсутствуют, запустите `mango-integrate`; он восстанавливает записи терминалов и
-лаунчер Firefox.
+лаунчер Firefox. X11-приложения также зависят от сервера вложенного Xwayland.
+Если они не появляются или открываются вне mango, проверьте `echo "$DISPLAY"` и
+что сервер жив через `glxinfo -b` или bionic `glinfo -b`. Стабильная обёртка без
+glamor удерживает `:1` работоспособным с `XWAYLAND_NO_GLAMOR=1`,
+`LIBGL_DRI3_DISABLE=1` и `+iglx -shm`; `MANGO_XWAYLAND_GLAMOR=1` может вернуть
+падения DRI3. Запускайте X11-приложения изнутри mango или через
+`mango-termux -s`; вложенный Xwayland обычно `:1` при внешнем `:0`.
 
 ### 9.8 Ручное восстановление
 
@@ -1000,8 +1052,12 @@ rm -rf "$PREFIX/libexec/mango-termux"
 
 - `NOCTALIA_ROOTFS` — необязательное явное переопределение rootfs при установке.
   Если не задано, установщик ищет в `installed-rootfs/*` и `containers/*/rootfs`
-  и записывает выбор в `runtime.env`. Лаунчер rootfs не ищет и при расхождении
-  заданного значения со встроенным завершается с ошибкой.
+  и записывает выбор в `runtime.env`; при отсутствии пригодного rootfs
+  `./install-noctalia-termux.sh` без флагов автоматически запускает bootstrap
+  (`proot-distro` + `pacman`), если не указан `--no-bootstrap`. Явный
+  непригодный `NOCTALIA_ROOTFS` завершается ошибкой без автоустановки. Лаунчер
+  rootfs не ищет и при расхождении заданного значения со встроенным завершается
+  с ошибкой.
 - `NOCTALIA_LOADER`, `NOCTALIA_RPATH` и `NOCTALIA_NATIVE_BIN` — константы,
   записанные установщиком. Лаунчер не обнаруживает и не перелинковывает их
   заново.
@@ -1017,7 +1073,19 @@ rm -rf "$PREFIX/libexec/mango-termux"
 - `TMPDIR` — `$PREFIX/tmp`.
 - `XDG_RUNTIME_DIR` — `$PREFIX/tmp`.
 - `WAYLAND_DISPLAY` — `wayland-0` по умолчанию.
-- `DISPLAY` — `:0` по умолчанию для вложенных дочерних процессов Xwayland.
+- `DISPLAY` — внешний Termux:X11 по умолчанию использует `:0`; вложенный
+  Xwayland обычно `:1`. Проверяйте `echo "$DISPLAY"`, а не задавайте номер
+  жёстко.
+- `MANGO_XWAYLAND_GLAMOR` — `1` включает DRI3/glamor KGSL для аппаратного GLX и
+  может вернуть падения X-сервера; по умолчанию `0` — стабильная обёртка без
+  glamor.
+- `XWAYLAND_NO_GLAMOR` — `1` в стабильной обёртке `$PREFIX/tmp/mango-xwayland`
+  по умолчанию; запрещает glamor в Xwayland.
+- `LIBGL_DRI3_DISABLE` — `1` в стабильной обёртке по умолчанию; клиентская
+  подсказка Mesa, а не единственный переключатель DRI3. Сервер без glamor и
+  аргументы `+iglx -shm` также важны.
+- `WLR_XWAYLAND` — переопределяет путь к серверу Xwayland и источник,
+  используемый сгенерированной обёрткой.
 - `XDG_CONFIG_HOME` — `$HOME/.config`.
 - `XDG_STATE_HOME` — `$HOME/.local/state`.
 - `XDG_DATA_HOME` — `$HOME/.local/share`.
