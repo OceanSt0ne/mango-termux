@@ -16,7 +16,7 @@
 > **Порт для Termux/Android:** этот репозиторий — адаптация [mango](https://github.com/mangowm/mango) для Android/Termux.
 > Композитор работает внутри Termux:X11 без PRoot.
 >
-> **Опциональная интеграция с Noctalia:** [English](TERMUX_NOCTALIA.md) | [Русский](TERMUX_NOCTALIA_ru.md).
+> **Noctalia 5.4.1 (нативно, без proot):** rootfs Arch используется только как источник бинарника и ресурсов; устаревшие proot/debug-руководства: [English](TERMUX_NOCTALIA.md) | [Русский](TERMUX_NOCTALIA_ru.md).
 >
 > **Требования к устройству:** эта версия предназначена только для телефонов на процессорах Qualcomm Snapdragon с GPU Adreno. MediaTek, Exynos, Tensor и другие SoC не поддерживаются.
 >
@@ -37,8 +37,9 @@ Mango — быстрый, многофункциональный Wayland-ком�
 и `com.termux.x11`) и использует нативный бэкенд wlroots `wlr_x11_backend`.
 Termux:GUI больше не используется.
 
-Опциональная интеграция Noctalia/Arch proot выполняется отдельно и не
-требуется.
+Noctalia 5.4.1 запускается нативно в Termux без proot. Rootfs Arch нужен
+только как источник единственного ELF `usr/bin/noctalia` и его ресурсов;
+proot-контейнер при этом не запускается.
 
 ### Архитектура кратко
 
@@ -403,29 +404,31 @@ grun --shell vkmark
   `termux-compat/mango-firefox`, `termux-compat/fix-mango-config.sh`,
   `termux-compat/install-benchmark-fixes.sh`,
   `termux-compat/build-arch-turnip.sh`.
-- Установленные вспомогательные интеграции: `mango-integrate`, `mango-host-run`,
+- Установленные вспомогательные интеграции: `mango-integrate`, `mango-noctalia`,
   `mango-gpu-run`, `mango-firefox`.
 - `termux-compat/scenefx-termux.patch`.
 - `termux/x11-check.c`.
-- `TERMUX_NOCTALIA.md` и `TERMUX_NOCTALIA_ru.md`: опциональное руководство по
-  интеграции Arch proot, настройке нативного KGSL, скрипту запуска Noctalia и
-  изоляции окружения. Не является частью обязательного host-порта.
+- `TERMUX_NOCTALIA.md` и `TERMUX_NOCTALIA_ru.md`: устаревшие proot/debug
+  руководства; нативный путь Noctalia в Termux они не описывают и не являются
+  частью обязательного host-порта.
 
 ### Универсальные интеграции по умолчанию
 
-- `meson install` безусловно устанавливает `mango-integrate`, `mango-host-run`,
+- `meson install` безусловно устанавливает `mango-integrate`, `mango-noctalia`,
   `mango-gpu-run` и `mango-firefox` в Termux; необязательные пакеты не нужны во
   время сборки.
-- `mango-integrate` идемпотентен: патчит существующие `.desktop`-файлы Firefox и
-  терминалов, устанавливает launcher Firefox при наличии Firefox, делает
-  однократную резервную копию `.mango-bak` и создаёт shell-конфиги
-  kitty/foot/ghostty только если их нет.
+- `mango-integrate` идемпотентен: восстанавливает терминальные `.desktop`-файлы
+  до обычного `Exec=kitty`/`Exec=foot`, ставит прямой launcher Firefox,
+  устанавливает нативный launcher Noctalia, переносит конфигурацию Noctalia,
+  делает однократные резервные копии и создаёт shell-конфиги kitty/foot/ghostty
+  только если их нет.
 - Поддерживаемые терминалы: kitty, kitty-open, foot, footclient, foot-server и
-  ghostty. Их `.desktop`-файлы используют `mango-host-run` с
-  `/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH`.
-- `mango-host-run` очищает переменные PRoot, восстанавливает нативные пути
-  Termux/SHELL/PATH, загружает `$PREFIX/tmp/mango-session.env`, задаёт значения
-  GUI-переменных по умолчанию и выполняет host-команду.
+  ghostty. Их `.desktop`-файлы получают обычный `Exec=kitty`, `Exec=foot` и т. п.
+  без `/usr/bin/env` и без очистки `LD_*`.
+- `mango-noctalia` находит rootfs (`installed-rootfs/*` или
+  `containers/*/rootfs`), готовит пропатченную нативную копию
+  `$PREFIX/libexec/mango-termux/noctalia-native` и запускает её напрямую в
+  Termux без proot и без host-моста.
 - `mango-gpu-run` предпочитает приватный стек Mesa Zink/Turnip, откатывается на
   системный Zink и больше не завершается с ошибкой при их отсутствии.
 - Пакеты, установленные позже через `pkg` или `.deb`, подхватываются при
@@ -553,19 +556,21 @@ cd ~/Projects/mango-termux
 - `SCENEFX_DIR=/path/to/scenefx ./build-termux.sh` использует внешнее дерево
   scenefx; непатченный git checkout получает патч автоматически.
 - Скрипт использует release `-O3`, устанавливает `mango`, `mmsg`, `mangonag`,
-  `mango-x11-check` и `mango-termux`.
+  `mango-x11-check`, `mango-termux` и `mango-noctalia`.
 - Создаёт приватные GPU-копии в `$PREFIX/lib/mango-termux`, патчит ссылки
   Android EGL/GLES и готовит `~/.config/mango` для новой установки.
 - Также устанавливает приватный Freedreno/KGSL Mesa 27 в
   `$PREFIX/opt/mesa-kgsl`, если существует `/dev/kgsl-3d0`; для пропуска
   используйте `MANGO_SKIP_KGSL=1`.
-- Всегда запускает `$PREFIX/bin/mango-integrate` после установки; необязательные
-  пакеты, такие как Firefox и терминалы, не являются предварительными
-  требованиями сборки, а установленные позже подхватываются при следующем
-  запуске.
+- Всегда запускает `$PREFIX/bin/mango-integrate` после установки; rootfs Arch не
+  требуется во время сборки, а при появлении позже нативная Noctalia применяется
+  при следующем запуске `mango-termux` или ручном `mango-integrate`.
+  Необязательные пакеты, такие как Firefox и терминалы, не являются
+  предварительными требованиями сборки, а установленные позже подхватываются при
+  следующем запуске.
 - `MANGO_SKIP_INTEGRATIONS=1` пропускает все автоматические интеграции;
-  `MANGO_SKIP_FIREFOX_FIX=1` передаёт `--no-firefox`;
-  `MANGO_SKIP_NOCTALIA_BRIDGE=1` передаёт `--no-terminals`.
+  `MANGO_SKIP_FIREFOX_FIX=1` передаёт `--no-firefox`. Отдельной переменной для
+  отключения терминалов или Noctalia больше нет.
 - Установленный `$PREFIX/bin/mango` — обычная сборка с линковкой Mesa/Turnip;
   `$PREFIX/lib/mango-termux/mango` — приватная сборка Android
   EGL/AHardwareBuffer.
@@ -628,7 +633,8 @@ mango-termux
 
 ### Поведение launcher
 
-- При каждом старте нефатально обновляет интеграции перед запуском композитора.
+- При каждом старте нефатально обновляет интеграции перед запуском композитора,
+  включая установку и миграцию нативной Noctalia без proot.
 - Экспортирует нативный `PREFIX`; задаёт `TMPDIR=$PREFIX/tmp`; нормализует
   `XDG_RUNTIME_DIR` под `$PREFIX`; задаёт `SHELL=$PREFIX/bin/fish` с откатом на
   `$PREFIX/bin/bash`.
@@ -652,8 +658,8 @@ mango-termux
   `$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`; если Gallium KGSL
   отсутствует, но ICD есть, выводит предупреждение и использует штатную Mesa, не
   прерывая запуск.
-- При наличии host-шины `src/main.c` добавляет PREFIX/TMPDIR/SHELL и
-  GUI-переменные в `dbus-update-activation-environment`.
+- Нативная Noctalia наследует существующую D-Bus-сессию или запускается через
+  `dbus-run-session`; host-мост и его обёртка удалены.
 - Экспортирует `DISPLAY` вложенного Xwayland дочерним процессам, чтобы
   X11-приложения, запущенные внутри mango, оставались во вложенной сессии.
 - Снимает `LD_LIBRARY_PATH` перед exec приватного AHB-бинарника.
@@ -676,11 +682,10 @@ mango-termux
 | `MANGO_SKIP_KGSL` | `1` пропускает автоматическую установку Freedreno/KGSL Mesa 27 в `build-termux.sh`. |
 | `MANGO_SKIP_INTEGRATIONS` | `1` пропускает автоматический запуск `mango-integrate` в `build-termux.sh`. |
 | `MANGO_SKIP_FIREFOX_FIX` | `1` передаёт `--no-firefox` в `mango-integrate` из `build-termux.sh`. |
-| `MANGO_SKIP_NOCTALIA_BRIDGE` | `1` передаёт `--no-terminals` в `mango-integrate` из `build-termux.sh`. |
+| `NOCTALIA_ROOTFS` | Явный путь к rootfs Arch с `usr/bin/noctalia`; иначе выполняется поиск в proot-distro. |
 | `MESA_KGSL_DIR` | Переопределяет каталог приватной установки KGSL для установщика. |
 | `PROOT_DISTRO_NAME` | Контейнер Arch proot для опциональных скриптов Turnip/бенчмарков. |
 | `JOBS`, `MESA_BUILD_DIR` | Параллелизм сборки Arch Turnip и рабочий каталог. |
-| `NOCTALIA_GPU` | Опциональный GPU-режим Arch Noctalia; по умолчанию `kgsl`, `0` = llvmpipe, `zink` — устаревший. |
 
 ### Примеры
 
@@ -798,8 +803,9 @@ MANGO_TERMUX_RENDERER=turnip mango-termux --restart -d 2>&1 | \
   `mango-gpu-run`.
 - `$PREFIX/bin/firefox` заменяется обёрткой; исходный launcher пакета
   сохраняется как `firefox.mango-bak`.
-- `.desktop`-файлы Firefox в Termux и Arch proot переводятся на
-  `mango-firefox` с резервными копиями `.mango-bak`.
+- `.desktop`-файлы Firefox в Termux переводятся на прямой
+  `Exec=$PREFIX/bin/mango-firefox` без Arch `/usr/bin/env` и без proot; исходные
+  файлы сохраняются как `.mango-bak`.
 
 Запуск или восстановление вручную:
 
@@ -811,8 +817,8 @@ mango-integrate --no-terminals
 
 - `MANGO_SKIP_FIREFOX_FIX=1` передаёт `--no-firefox` в автоматическую
   интеграцию.
-- После установки перезапустите Firefox и Noctalia или перезапустите сессию через
-  `mango-termux --restart`.
+- После установки перезапустите Firefox и нативную Noctalia или перезапустите
+  сессию через `mango-termux --restart`.
 - После обновления пакета Firefox запустите `mango-integrate` (или установщик),
   чтобы вернуть обёртку.
 - `mango-gpu-run "$PREFIX/lib/firefox/gfxtest" glx -w` должен показать
@@ -874,24 +880,43 @@ grun --shell vkmark
   Turnip для `vkmark` и изолирует `glibc-runner` от bionic-переменных Mesa/KGSL.
 - `vkmark` может показывать очень высокий FPS; см. раздел устранения неполадок.
 
-### Опциональная интеграция Noctalia
+### Нативная Noctalia без proot
 
-- Noctalia внутри Arch proot необязательна и не требуется для mango-termux.
-- Руководства: `TERMUX_NOCTALIA.md` / `TERMUX_NOCTALIA_ru.md`.
-- `~/.config/mango/start-noctalia.sh` очищает переменные Mesa/Vulkan/библиотек
-  хоста перед входом в proot, чтобы Arch использовал собственную нативную
-  Mesa 27 KGSL (`renderer="FD735"`).
-- `NOCTALIA_GPU=kgsl` — по умолчанию; `NOCTALIA_GPU=0` принудительно включает
-  llvmpipe; `NOCTALIA_GPU=zink` — устаревший режим.
-- `MANGO_INSTANCE_SIGNATURE` заставляет Noctalia использовать нативный бэкенд
-  рабочих пространств `mango-ipc`.
-- `mango-integrate` патчит существующие терминальные `.desktop`-файлы для kitty,
-  kitty-open, foot, footclient, foot-server и ghostty, чтобы запускать их через
-  `mango-host-run` с `/usr/bin/env -u LD_PRELOAD -u LD_LIBRARY_PATH`.
-- Он создаёт shell-конфиги kitty/foot/ghostty только если их нет, поэтому
-  существующие конфиги никогда не перезаписываются, и безопасен при отсутствии
-  этих пакетов.
-- Сам host-порт не использует PRoot.
+- Noctalia 5.4.1 — один ELF по пути
+  `$PREFIX/var/lib/proot-distro/containers/archlinuxarm/rootfs/usr/bin/noctalia`;
+  отдельного стека quickshell/qs/QML нет.
+- Noctalia запускается нативно в Termux без proot. Установленный
+  `$PREFIX/bin/noctalia` — копия `mango-noctalia`.
+- `mango-noctalia` автоматически находит rootfs (`installed-rootfs/*` или
+  `containers/*/rootfs`) и готовит в
+  `$PREFIX/libexec/mango-termux/noctalia-native` пропатченную копию через
+  `patchelf`: интерпретатор Termux glibc
+  `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`, RPATH
+  `$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib` и закреплённый rootfs
+  `libstdc++`. Загрузчик из rootfs падает с Android seccomp SIGSYS; патченная
+  копия переживает и повторный self-reexec Noctalia.
+- Noctalia и её дочерние процессы не получают `LD_LIBRARY_PATH`, `LD_PRELOAD`
+  или переменные Mesa/EGL. Дочерние процессы используют `HOME`, `PREFIX`,
+  `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` (с
+  откатом на bash), нативные XDG config/state/data и конфиги из `$HOME/.config`.
+- Ресурсное окружение:
+  `XDG_DATA_DIRS="$PREFIX/share:$ROOTFS/usr/share"`,
+  `XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$ROOTFS/etc/xdg"`,
+  `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, нативный
+  `FONTCONFIG_PATH=$PREFIX/etc/fonts`; путь к rootfs можно переопределить через
+  `NOCTALIA_ROOTFS`.
+- D-Bus наследуется от сессии или запускается через `dbus-run-session`.
+- `mango-integrate` устанавливает нативный launcher, сохраняет старый proot-proxy
+  как `noctalia.proot-bak`, переносит `root/.config/noctalia`,
+  `root/.local/state/noctalia` и `root/.local/share/noctalia` в нативные
+  `$HOME/...` только если целевой путь отсутствует.
+- Автозапуск: `mango-integrate` меняет `~/.config/mango/mics.conf` на
+  `exec=noctalia` и переписывает proot-скрипт `start-noctalia.sh` как нативный
+  shim с резервными копиями `.mango-bak`.
+- `mango-integrate --check` проверяет нативную Noctalia и отсутствие удалённого
+  host-моста в терминальных записях.
+- `TERMUX_NOCTALIA.md` и `TERMUX_NOCTALIA_ru.md` — устаревшие proot/debug
+  материалы, а не описание нативного пути.
 
 ## 5. Устранение неполадок
 
@@ -991,6 +1016,19 @@ DISPLAY=:0 mango-x11-check; echo $?
 - `couldn't create renderer`: убедитесь, что scenefx собран с
   `scenefx-termux.patch`, установлен в `$PREFIX`, а launcher использует
   ожидаемый бинарник.
+- `error: no usable rootfs found`: установите Arch rootfs с
+  `usr/bin/noctalia` либо задайте `NOCTALIA_ROOTFS`; `mango-noctalia` ищет
+  `installed-rootfs/*` и `containers/*/rootfs`.
+- `error: patchelf is required to prepare the native Noctalia binary`: выполните
+  `pkg install patchelf` и повторите `mango-noctalia` или `mango-integrate`.
+- `error: Termux glibc loader not found`: проверьте наличие
+  `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`.
+- `error: rootfs libstdc++ not found`: rootfs неполный; проверьте
+  `$ROOTFS/usr/lib/libstdc++.so.6`. Загрузчик из rootfs завершается с Android
+  seccomp SIGSYS, поэтому запускайте `noctalia`/`mango-noctalia`, а не rootfs
+  loader напрямую.
+- Проверка нативной Noctalia: `mango-integrate --check`, `mango-termux --restart`
+  и `noctalia --version`; рабочая конфигурация не запускает процесс proot.
 - Нет GPU-эффектов: проверьте, что конфигурация включает эффекты, что существует
   `$PREFIX/opt/mesa-kgsl` (запустите `./termux-compat/install-freedreno-kgsl.sh`)
   и установлен `mesa-vulkan-icd-freedreno`.
@@ -1012,8 +1050,14 @@ cd ~/Projects/mango-termux
   release `-O3` и обновляет установленные бинарники и приватные GPU-копии.
 - Он также переиспользует или устанавливает приватный Freedreno/KGSL-стек, если
   не задан `MANGO_SKIP_KGSL=1`.
-- Он повторно запускает `mango-integrate`, восстанавливая обёртку `mango-firefox`
-  и `.desktop`-файлы, если не задан `MANGO_SKIP_INTEGRATIONS=1`;
-  `MANGO_SKIP_FIREFOX_FIX=1` и `MANGO_SKIP_NOCTALIA_BRIDGE=1` передают
-  `--no-firefox` и `--no-terminals` соответственно.
+- Он повторно запускает `mango-integrate`, восстанавливая обёртку `mango-firefox`,
+  терминальные `.desktop`-файлы и нативную Noctalia, если не задан
+  `MANGO_SKIP_INTEGRATIONS=1`; `MANGO_SKIP_FIREFOX_FIX=1` передаёт
+  `--no-firefox`.
+- Пересборка и запуск Noctalia не требуют proot. Нативная копия
+  `$PREFIX/libexec/mango-termux/noctalia-native` пересоздаётся при следующем
+  `mango-noctalia`, если изменились rootfs-бинарник, `libstdc++` или loader.
+- Проверка: `test -x "$PREFIX/bin/noctalia" && echo noctalia-ok`,
+  `mango-integrate --check` и
+  `test -x "$PREFIX/libexec/mango-termux/noctalia-native" && echo noctalia-native-ok`.
 - После пересборки перезапустите сессию: `mango-termux --restart`.

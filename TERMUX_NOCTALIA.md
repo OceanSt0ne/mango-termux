@@ -2,6 +2,10 @@
 
 # Noctalia in Termux + mango (Arch Linux ARM proot)
 
+> **Legacy guide:** mango-termux now runs Noctalia natively in Termux without
+> proot; see the main README. This document is retained only for legacy proot
+> debugging and manual rootfs tooling.
+
 Tested stack:
 
 ```text
