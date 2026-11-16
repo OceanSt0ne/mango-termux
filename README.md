@@ -307,17 +307,18 @@ grun --shell vkmark
 
 ### Helper scripts and documentation
 
-- `termux-compat/install-freedreno-kgsl.sh`, `termux-compat/install-firefox-webgl.sh`, `termux-compat/mango-gpu-run`, `termux-compat/mango-firefox`, `termux-compat/mango-noctalia`, `termux-compat/fix-mango-config.sh`, `termux-compat/install-benchmark-fixes.sh`, `termux-compat/build-arch-turnip.sh`.
-- Installed integration helpers: `mango-integrate`, `mango-noctalia`, `mango-gpu-run`, `mango-firefox`.
+- `termux-compat/install-freedreno-kgsl.sh`, `termux-compat/install-firefox-webgl.sh`, `termux-compat/mango-gpu-run`, `termux-compat/mango-firefox`, `termux-compat/mango-noctalia`, `termux-compat/noctalia-exec`, `termux-compat/fix-mango-config.sh`, `termux-compat/install-benchmark-fixes.sh`, `termux-compat/build-arch-turnip.sh`.
+- Installed integration helpers: `mango-integrate`, `mango-noctalia`, `noctalia-exec`, `mango-gpu-run`, `mango-firefox`.
 - `termux-compat/scenefx-termux.patch`.
 - `termux/x11-check.c`.
 - `TERMUX_NOCTALIA.md` and `TERMUX_NOCTALIA_ru.md`: legacy proot/debug references for the old Arch Noctalia setup; the native launcher now runs Noctalia without proot.
 
 ### Universal default integrations
 
-- `meson install` installs `mango-integrate`, `mango-noctalia`, `mango-gpu-run`, and `mango-firefox` unconditionally on Termux; optional packages are not needed at build time.
+- `meson install` installs `mango-integrate`, `mango-noctalia`, `noctalia-exec`, `mango-gpu-run`, and `mango-firefox` unconditionally on Termux; optional packages are not needed at build time.
 - `mango-integrate` is idempotent: it installs the native Noctalia launcher, restores terminal entries to direct commands, points Firefox entries directly at `$PREFIX/bin/mango-firefox`, installs that launcher when Firefox exists, backs up once as `.mango-bak`, and creates kitty/foot/ghostty shell configs only if absent.
-- Terminals covered: kitty, kitty-open, foot, footclient, foot-server, and ghostty. Their desktop entries are restored to plain direct commands such as `Exec=kitty` and `Exec=foot`; no host bridge or LD sanitizer is used.
+- Noctalia launches applications through `noctalia-exec` (`[shell] launch_apps_custom_command = "noctalia-exec $CMD"`). The wrapper drops rootfs/glibc EGL, Vulkan, DRI, QML and Qt paths, keeps the live `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR`, D-Bus address and native KGSL/Turnip overrides, and restores native `PREFIX`, `HOME`, `PATH`, `SHELL=$PREFIX/bin/fish`, `TERM`, and XDG roots.
+- Terminals covered: kitty, kitty-open, foot, footclient, foot-server, and ghostty. Their desktop entries are restored to plain direct commands such as `Exec=kitty` and `Exec=foot`; no host bridge or `LD_*` rewrite is used, and their configs get an explicit fish shell/command line when absent.
 - `mango-noctalia` auto-detects the rootfs (`installed-rootfs/*` or `containers/*/rootfs`), prepares `$PREFIX/libexec/mango-termux/noctalia-native` with `patchelf`, and runs that copy with the Termux glibc interpreter and rootfs-only resource paths.
 - `mango-integrate` migrates rootfs `root/.config/noctalia`, `root/.local/state/noctalia`, and `root/.local/share/noctalia` to native `$HOME/...` only when absent, copies missing `root/Walls` wallpapers to `$HOME/Walls`, rewrites stale `/root/` paths in native Noctalia settings, changes `~/.config/mango/mics.conf` to `exec=noctalia`, and rewrites a proot `start-noctalia.sh` as a native shim with `.mango-bak` backups.
 - `mango-gpu-run` prefers the private Mesa Zink/Turnip stack, falls back to system Zink, and no longer hard-fails when they are absent.
@@ -490,7 +491,7 @@ mango-termux
 - Sets `WLR_BACKENDS=x11` by default.
 - Selects the renderer and binary as described above.
 - GPU detection prefers the private `$PREFIX/opt/mesa-kgsl`, then system `$PREFIX/lib/dri/kgsl_dri.so`, and the Freedreno ICD from the private tree or `$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json`; if KGSL Gallium is absent but the ICD exists, it warns and uses stock Mesa instead of aborting.
-- Launches Noctalia via the native `mango-noctalia` copy with `XDG_DATA_DIRS="$PREFIX/share:$ROOTFS/usr/share"`, `XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$ROOTFS/etc/xdg"`, `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, native fontconfig, private rootfs EGL/Vulkan/DRI paths, and no exported `LD_LIBRARY_PATH`/`LD_PRELOAD`; D-Bus is inherited or started with `dbus-run-session`.
+- Launches Noctalia via the native `mango-noctalia` copy with native `XDG_DATA_DIRS="$PREFIX/share"`, `XDG_CONFIG_DIRS="$PREFIX/etc/xdg"`, `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, native fontconfig, private rootfs EGL/Vulkan/DRI paths, and no exported `LD_LIBRARY_PATH`/`LD_PRELOAD`; D-Bus is inherited or started with `dbus-run-session`. Applications it spawns go through `noctalia-exec`, so rootfs library and XDG paths never reach native Termux clients.
 - When a host bus exists, `src/main.c` adds PREFIX/TMPDIR/SHELL and the GUI variables to `dbus-update-activation-environment`.
 - Writes `$PREFIX/tmp/mango-xwayland` with `XWAYLAND_NO_GLAMOR=1`, `LIBGL_DRI3_DISABLE=1`, and Xwayland arguments `+iglx -shm`; `MANGO_XWAYLAND_GLAMOR=1` switches to the patched DRI3/glamor KGSL server.
 - Exports nested Xwayland `DISPLAY` to children so X11 apps launched inside mango stay inside the nested session.
@@ -693,8 +694,8 @@ grun --shell vkmark
 - The installed `$PREFIX/bin/noctalia` is a copy of `mango-noctalia`; the launcher auto-detects the rootfs (`installed-rootfs/*` or `containers/*/rootfs`) and prepares `$PREFIX/libexec/mango-termux/noctalia-native` with `patchelf`.
 - The native copy uses the Termux glibc interpreter `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`, RPATH `$PREFIX/libexec/mango-termux/rootfs-libs:$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib` (plus existing multiarch dirs), and a pinned rootfs `libstdc++`; the rootfs loader itself fails with Android seccomp `SIGSYS`, and the patched copy survives Noctalia self-reexec.
 - `rootfs-libs` is a private symlink farm for rootfs Mesa 27 (`libgbm`, `libgallium`, `libLLVM`, `libxml2.so.16`) plus a private `egl_vendor.d` manifest and Vulkan ICD. This stops the stale Termux-glibc Mesa 24.2.6/`libxml2.so.2` chain from being selected and fixes `eglGetDisplay` without adding `libxml2.so.2` or touching the rootfs.
-- No `LD_LIBRARY_PATH` or `LD_PRELOAD` is exported. Noctalia gets only scoped EGL/Vulkan/DRI variables (`__EGL_VENDOR_LIBRARY_DIRS`, `VK_ICD_FILENAMES`, `VK_DRIVER_FILES`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`); native children use `HOME`, `PREFIX`, `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` (bash fallback), and native XDG config/state/data.
-- Resource env: `XDG_DATA_DIRS="$PREFIX/share:$ROOTFS/usr/share"`, `XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$ROOTFS/etc/xdg"`, `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, `FONTCONFIG_PATH=$PREFIX/etc/fonts`, and the `NOCTALIA_ROOTFS` override; D-Bus is inherited or a session bus is started with `dbus-run-session`.
+- No `LD_LIBRARY_PATH` or `LD_PRELOAD` is exported. Noctalia gets only scoped EGL/Vulkan/DRI variables (`__EGL_VENDOR_LIBRARY_DIRS`, `VK_ICD_FILENAMES`, `VK_DRIVER_FILES`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`); applications it spawns are routed through `noctalia-exec`, which removes those rootfs paths and restores native `HOME`, `PREFIX`, `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish` (bash fallback), `TERM`, and native XDG config/state/data.
+- Resource env: `XDG_DATA_DIRS="$PREFIX/share"`, `XDG_CONFIG_DIRS="$PREFIX/etc/xdg"`, `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, `FONTCONFIG_PATH=$PREFIX/etc/fonts`, and the `NOCTALIA_ROOTFS` override; the rootfs asset bundle is exposed only through `NOCTALIA_ASSETS_DIR`, and D-Bus is inherited or a session bus is started with `dbus-run-session`.
 - `mango-integrate` installs the native launcher, backs up the old proxy as `noctalia.proot-bak`, and migrates rootfs `root/.config/noctalia`, `root/.local/state/noctalia`, and `root/.local/share/noctalia` to native `$HOME/...` only when absent.
 - It changes `~/.config/mango/mics.conf` to `exec=noctalia` for native autostart and rewrites a proot `start-noctalia.sh` as a native shim, keeping `.mango-bak` backups of the originals.
 - It also copies missing `root/Walls` files to `$HOME/Walls` and rewrites `/root/` paths in `~/.local/state/noctalia/settings.toml` and `~/.config/noctalia/settings.toml` to the native home, so wallpaper warnings disappear.

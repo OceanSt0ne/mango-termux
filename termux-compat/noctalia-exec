@@ -1,0 +1,167 @@
+#!/data/data/com.termux/files/usr/bin/bash
+#
+# noctalia-exec - launch a child application in a clean native Termux environment.
+#
+# Noctalia itself runs from an Arch rootfs through the Termux glibc loader and
+# therefore needs __EGL_VENDOR_LIBRARY_DIRS, LIBGL_DRIVERS_PATH and
+# GBM_BACKENDS_PATH pointing inside that rootfs.  Those paths must never reach
+# native Termux applications: the rootfs libEGL_mesa.so.0 is a glibc build and
+# either fails to load or hijacks the native Mesa stack.  The launcher also
+# exposes the rootfs XDG data/config trees for its own assets.
+#
+# Noctalia launches every application through this wrapper, which rebuilds a
+# native environment and keeps only the values that belong to the live MangoWM
+# session (Wayland/X11 socket, D-Bus, native KGSL/Turnip overrides).
+#
+# Usage:
+#   noctalia-exec <command> [arguments...]
+set -u
+
+prefix=${PREFIX:-/data/data/com.termux/files/usr}
+home=${HOME:-/data/data/com.termux/files/home}
+
+if (($# == 0)); then
+	printf 'usage: noctalia-exec <command> [arguments...]\n' >&2
+	exit 2
+fi
+
+session="$prefix/tmp/mango-session.env"
+
+# Values of the live compositor session win over a possibly stale session file.
+keep_wayland=${WAYLAND_DISPLAY:-}
+keep_display=${DISPLAY:-}
+keep_runtime=${XDG_RUNTIME_DIR:-}
+keep_dbus=${DBUS_SESSION_BUS_ADDRESS:-}
+keep_signature=${MANGO_INSTANCE_SIGNATURE:-}
+keep_xcursor_theme=${XCURSOR_THEME:-}
+keep_xcursor_size=${XCURSOR_SIZE:-}
+
+if [[ -f $session && -r $session ]]; then
+	# Restores the native KGSL/Turnip overrides written by run-mango.sh.
+	set -a
+	# shellcheck disable=SC1090
+	. "$session"
+	set +a
+fi
+
+[[ -n $keep_wayland ]] && WAYLAND_DISPLAY=$keep_wayland
+[[ -n $keep_display ]] && DISPLAY=$keep_display
+[[ -n $keep_runtime ]] && XDG_RUNTIME_DIR=$keep_runtime
+[[ -n $keep_dbus ]] && DBUS_SESSION_BUS_ADDRESS=$keep_dbus
+[[ -n $keep_signature ]] && MANGO_INSTANCE_SIGNATURE=$keep_signature
+[[ -n $keep_xcursor_theme ]] && XCURSOR_THEME=$keep_xcursor_theme
+[[ -n $keep_xcursor_size ]] && XCURSOR_SIZE=$keep_xcursor_size
+[[ -n ${XDG_RUNTIME_DIR:-} ]] || XDG_RUNTIME_DIR=$prefix/tmp
+
+# Native Termux identity.
+PREFIX=$prefix
+HOME=$home
+TMPDIR=$prefix/tmp
+PATH=$prefix/bin:/system/bin:/system/xbin
+SHELL=$prefix/bin/fish
+[[ -x $SHELL ]] || SHELL=$prefix/bin/bash
+if [[ -z ${TERM:-} || $TERM == dumb ]]; then
+	TERM=xterm-256color
+fi
+if [[ -d $prefix/share/terminfo ]]; then
+	TERMINFO=$prefix/share/terminfo
+fi
+
+# Drop everything that belongs to the rootfs, the glibc loader or Noctalia's
+# private runtime.
+unset LD_PRELOAD LD_LIBRARY_PATH_ORIG EGL_PLATFORM FD_KGSL_DMABUF
+unset __EGL_VENDOR_LIBRARY_DIRS LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH
+unset QML2_IMPORT_PATH QML_IMPORT_PATH QML_DISK_CACHE_PATH \
+	QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH QSG_RHI_BACKEND \
+	QT_QUICK_BACKEND QT_LOGGING_RULES
+unset MESA_SHADER_CACHE_DIR MESA_SHADER_CACHE_MAX_SIZE \
+	MESA_DEBUG LIBGL_ALWAYS_SOFTWARE MESA_GL_VERSION_OVERRIDE \
+	vblank_mode ZINK_DEBUG
+unset NOCTALIA_ASSETS_DIR NOCTALIA_ROOTFS NOCTALIA_LOADER NOCTALIA_RPATH \
+	NOCTALIA_NATIVE_BIN NOCTALIA_EGL_DIR NOCTALIA_LIBGL_DRIVERS \
+	NOCTALIA_GBM_BACKENDS NOCTALIA_HAS_QT NOCTALIA_QML_CACHE \
+	NOCTALIA_QML_IMPORT NOCTALIA_QT_PLUGIN NOCTALIA_QT_PLATFORM_PLUGIN \
+	NOCTALIA_QT_LOGGING NOCTALIA_DBUS_WRAPPED
+
+# Rebuild the native Freedreno/KGSL (or stock Mesa) paths from real Termux
+# files only.  Rootfs and glibc-loader directories never pass this filter.
+kgsl=""
+if [[ -f $prefix/opt/mesa-kgsl/lib/dri/kgsl_dri.so ]]; then
+	kgsl=$prefix/opt/mesa-kgsl
+elif [[ -f $prefix/lib/dri/kgsl_dri.so ]]; then
+	kgsl=$prefix
+fi
+
+if [[ -n $kgsl ]]; then
+	LD_LIBRARY_PATH=$kgsl/lib
+	LIBGL_DRIVERS_PATH=$kgsl/lib/dri
+	MESA_LOADER_DRIVER_OVERRIDE=kgsl
+	GALLIUM_DRIVER=kgsl
+	export LD_LIBRARY_PATH LIBGL_DRIVERS_PATH \
+		MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER
+	if [[ -d $kgsl/lib/gbm ]]; then
+		GBM_BACKENDS_PATH=$kgsl/lib/gbm
+		export GBM_BACKENDS_PATH
+	fi
+fi
+
+icd=""
+for candidate in \
+	"$prefix/opt/mesa-kgsl/share/vulkan/icd.d/freedreno_icd.aarch64.json" \
+	"$prefix/share/vulkan/icd.d/freedreno_icd.aarch64.json"; do
+	if [[ -f $candidate ]]; then
+		icd=$candidate
+		break
+	fi
+done
+if [[ -n $icd ]]; then
+	VK_DRIVER_FILES=$icd
+	VK_ICD_FILENAMES=$icd
+	export VK_DRIVER_FILES VK_ICD_FILENAMES
+else
+	unset VK_DRIVER_FILES VK_ICD_FILENAMES
+fi
+
+egl=""
+for candidate in \
+	"$prefix/opt/mesa-kgsl/share/glvnd/egl_vendor.d/50_mesa.json" \
+	"$prefix/share/glvnd/egl_vendor.d/50_mesa.json"; do
+	if [[ -f $candidate ]]; then
+		egl=$candidate
+		break
+	fi
+done
+if [[ -n $egl ]]; then
+	__EGL_VENDOR_LIBRARY_FILENAMES=$egl
+	export __EGL_VENDOR_LIBRARY_FILENAMES
+else
+	unset __EGL_VENDOR_LIBRARY_FILENAMES
+fi
+
+# Native XDG roots: no rootfs share/applications, icons or gschemas.
+XDG_DATA_HOME=$home/.local/share
+XDG_CONFIG_HOME=$home/.config
+XDG_STATE_HOME=$home/.local/state
+XDG_CACHE_HOME=$home/.cache
+XDG_DATA_DIRS=$prefix/share
+XDG_CONFIG_DIRS=$prefix/etc/xdg
+XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}
+XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-mango}
+
+if [[ -d $prefix/etc/fonts ]]; then
+	FONTCONFIG_PATH=$prefix/etc/fonts
+	export FONTCONFIG_PATH
+else
+	unset FONTCONFIG_PATH
+fi
+
+export PREFIX HOME TMPDIR PATH SHELL TERM TERMINFO \
+	XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME \
+	XDG_CACHE_HOME XDG_DATA_DIRS XDG_CONFIG_DIRS XDG_SESSION_TYPE \
+	XDG_CURRENT_DESKTOP
+for name in WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS \
+	MANGO_INSTANCE_SIGNATURE XCURSOR_THEME XCURSOR_SIZE; do
+	[[ -n ${!name:-} ]] && export "$name"
+done
+
+exec "$@"
