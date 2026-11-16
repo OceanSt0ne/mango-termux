@@ -607,9 +607,21 @@ if [[ -d $PREFIX/etc/fonts ]]; then
   export FONTCONFIG_PATH="$PREFIX/etc/fonts"
 fi
 
-export XDG_DATA_DIRS="$PREFIX/share:$NOCTALIA_ROOTFS/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
-export XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$NOCTALIA_ROOTFS/etc/xdg${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}"
+export XDG_DATA_DIRS="$PREFIX/share"
+export XDG_CONFIG_DIRS="$PREFIX/etc/xdg"
 export NOCTALIA_ASSETS_DIR
+
+if [[ -z ${TERM:-} || $TERM == dumb ]]; then
+  TERM=xterm-256color
+fi
+export TERM
+if [[ -d $PREFIX/share/terminfo ]]; then
+  export TERMINFO="$PREFIX/share/terminfo"
+fi
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+
+# These point inside the rootfs and are required by Noctalia itself.  Child
+# applications are started through noctalia-exec, which drops them again.
 
 export __EGL_VENDOR_LIBRARY_DIRS="$NOCTALIA_EGL_DIR"
 unset __EGL_VENDOR_LIBRARY_FILENAMES
@@ -679,10 +691,20 @@ LAUNCHER_BODY
   } >"$out"
 }
 
+emit_noctalia_exec() {
+  local out="$1"
+  local src="$self_dir/termux-compat/noctalia-exec"
+  if [[ ! -f $src ]]; then
+    die "missing child-environment wrapper: $src"
+  fi
+  install -m 0755 "$src" "$out"
+}
+
 install_launchers() {
-  local tmp bin_noctalia bin_mango
+  local tmp bin_noctalia bin_mango bin_exec
   bin_noctalia="$PREFIX/bin/noctalia"
   bin_mango="$PREFIX/bin/mango-noctalia"
+  bin_exec="$PREFIX/bin/noctalia-exec"
 
   mkdir -p "$PREFIX/bin" "$TMPDIR"
   tmp="$(mktemp "$TMPDIR/install-noctalia.XXXXXX")"
@@ -707,11 +729,71 @@ install_launchers() {
   install -m 0755 "$tmp" "$bin_noctalia"
   install -m 0755 "$tmp" "$bin_mango"
   rm -f "$tmp"
+  emit_noctalia_exec "$bin_exec"
 
   cmp -s "$bin_noctalia" "$bin_mango" ||
     die "installed Noctalia launchers differ: $bin_noctalia $bin_mango"
   info "installed launcher: $bin_noctalia"
   info "installed launcher: $bin_mango"
+  info "installed child wrapper: $bin_exec"
+}
+
+ensure_noctalia_child_command() {
+  local wrapper="$PREFIX/bin/noctalia-exec"
+  local file tmp
+  local command='launch_apps_custom_command = "noctalia-exec $CMD"'
+
+  [[ -x $wrapper ]] || return 0
+
+  for file in "$HOME/.local/state/noctalia/settings.toml" \
+              "$HOME/.config/noctalia/settings.toml"; do
+    [[ -f $file ]] || continue
+    grep -Fqx "$command" "$file" && continue
+
+    tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+      warn "cannot create temporary file for: $file"
+      continue
+    }
+    if ! awk -v cmd="$command" '
+      BEGIN { in_shell = 0; wrote = 0 }
+      /^\[shell\][[:space:]]*$/ {
+        in_shell = 1
+        print
+        if (!wrote) { print cmd; wrote = 1 }
+        next
+      }
+      /^\[/ { in_shell = 0 }
+      in_shell && /^[[:space:]]*launch_apps_custom_command[[:space:]]*=/ { next }
+      { print }
+      END {
+        if (!wrote) {
+          print ""
+          print "[shell]"
+          print cmd
+        }
+      }
+    ' "$file" >"$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      warn "cannot rewrite Noctalia settings: $file"
+      continue
+    fi
+
+    if cmp -s "$file" "$tmp"; then
+      rm -f "$tmp"
+      continue
+    fi
+    chmod --reference="$file" "$tmp" 2>/dev/null || true
+    backup_once "$file" || {
+      rm -f "$tmp"
+      continue
+    }
+    if ! mv "$tmp" "$file" 2>/dev/null; then
+      rm -f "$tmp"
+      warn "cannot replace: $file"
+      continue
+    fi
+    info "routed Noctalia app launches through noctalia-exec: $file"
+  done
 }
 
 warm_caches() {
@@ -1030,6 +1112,20 @@ run_check() {
     check_fail "launchers are not byte-identical"
   fi
 
+  if [[ -x $PREFIX/bin/noctalia-exec ]]; then
+    check_pass "child wrapper executable: $PREFIX/bin/noctalia-exec"
+  else
+    check_fail "child wrapper missing or not executable: $PREFIX/bin/noctalia-exec"
+  fi
+
+  if [[ -f $PREFIX/bin/noctalia ]] &&
+     grep -Fq 'export XDG_DATA_DIRS="$PREFIX/share"' "$PREFIX/bin/noctalia" &&
+     ! grep -Fq 'XDG_DATA_DIRS="$PREFIX/share:$NOCTALIA_ROOTFS' "$PREFIX/bin/noctalia"; then
+    check_pass "launcher keeps rootfs paths out of XDG_DATA_DIRS"
+  else
+    check_fail "launcher still exports rootfs paths in XDG_DATA_DIRS"
+  fi
+
   runtime_env="$priv_dir/runtime.env"
   if [[ -f $runtime_env ]] &&
      ( set +u; source "$runtime_env" 2>/dev/null;
@@ -1103,6 +1199,7 @@ migrate_walls_and_settings
 patch_start_shim
 patch_mics_config
 install_launchers
+ensure_noctalia_child_command
 warm_caches
 
 info "Noctalia is installed natively. Start it with: noctalia"

@@ -654,6 +654,64 @@ migrate_noctalia_walls() {
 	done
 }
 
+ensure_noctalia_child_command() {
+	[[ -n "$noctalia_rootfs" ]] || return 0
+	[[ -x "$bin/noctalia-exec" ]] || return 0
+
+	local command='launch_apps_custom_command = "noctalia-exec $CMD"'
+	local file tmp
+
+	for file in "$home/.local/state/noctalia/settings.toml" \
+		"$home/.config/noctalia/settings.toml"; do
+		[[ -f "$file" ]] || continue
+		grep -Fqx "$command" "$file" && continue
+
+		tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+			warn "cannot create temporary file for: $file"
+			continue
+		}
+		if ! awk -v cmd="$command" '
+			BEGIN { in_shell = 0; wrote = 0 }
+			/^\[shell\][[:space:]]*$/ {
+				in_shell = 1
+				print
+				if (!wrote) { print cmd; wrote = 1 }
+				next
+			}
+			/^\[/ { in_shell = 0 }
+			in_shell && /^[[:space:]]*launch_apps_custom_command[[:space:]]*=/ { next }
+			{ print }
+			END {
+				if (!wrote) {
+					print ""
+					print "[shell]"
+					print cmd
+				}
+			}
+		' "$file" >"$tmp" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot rewrite Noctalia settings: $file"
+			continue
+		fi
+
+		if cmp -s "$file" "$tmp"; then
+			rm -f "$tmp"
+			continue
+		fi
+		if ! backup_once "$file"; then
+			rm -f "$tmp"
+			continue
+		fi
+		set_mode_from "$file" "$tmp"
+		if ! mv "$tmp" "$file" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot replace: $file"
+			continue
+		fi
+		info "routed Noctalia app launches through noctalia-exec: $file"
+	done
+}
+
 patch_mics_config() {
 	local file="$home/.config/mango/mics.conf"
 	local tmp
@@ -778,6 +836,39 @@ create_terminal_configs() {
 	create_config_file "$config/kitty/kitty.conf" "shell $shell"$'\n'
 	create_config_file "$config/foot/foot.ini" "[main]"$'\n'"shell=$shell"$'\n'
 	create_config_file "$config/ghostty/config.ghostty" "command = $shell"$'\n'
+	ensure_terminal_shell "$shell"
+}
+
+ensure_terminal_shell() {
+	local shell="$1" file
+
+	file="$config/kitty/kitty.conf"
+	if [[ -f "$file" ]] && ! grep -Eq '^[[:space:]]*shell[[:space:]]+' "$file"; then
+		if printf 'shell %s\n' "$shell" >>"$file" 2>/dev/null; then
+			info "set kitty shell: $file"
+		else
+			warn "cannot update kitty config: $file"
+		fi
+	fi
+
+	file="$config/ghostty/config.ghostty"
+	if [[ -f "$file" ]] && ! grep -Eq '^[[:space:]]*command[[:space:]]*=' "$file"; then
+		if printf 'command = %s\n' "$shell" >>"$file" 2>/dev/null; then
+			info "set ghostty command: $file"
+		else
+			warn "cannot update ghostty config: $file"
+		fi
+	fi
+
+	file="$config/foot/foot.ini"
+	if [[ -f "$file" ]] && grep -q '^\[main\]' "$file" &&
+		! grep -Eq '^[[:space:]]*shell[[:space:]]*=' "$file"; then
+		if printf 'shell=%s\n' "$shell" >>"$file" 2>/dev/null; then
+			info "set foot shell: $file"
+		else
+			warn "cannot update foot config: $file"
+		fi
+	fi
 }
 
 remove_legacy_host_bridge() {
@@ -790,7 +881,7 @@ remove_legacy_host_bridge() {
 required_wrappers() {
 	printf '%s\n' mango-firefox mango-gpu-run
 	if [[ -n "$noctalia_rootfs" ]]; then
-		printf '%s\n' mango-noctalia
+		printf '%s\n' mango-noctalia noctalia-exec
 	fi
 }
 
@@ -930,6 +1021,7 @@ fi
 
 remove_legacy_host_bridge
 install_native_noctalia
+ensure_noctalia_child_command
 migrate_native_noctalia
 migrate_noctalia_walls
 patch_mics_config

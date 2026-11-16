@@ -339,6 +339,7 @@ if get_option('termux')
   # detected and handled at runtime by mango-integrate.
   install_data(
     'termux-compat/mango-noctalia',
+    'termux-compat/noctalia-exec',
     'termux-compat/mango-firefox',
     'termux-compat/mango-gpu-run',
     'termux-compat/mango-integrate',

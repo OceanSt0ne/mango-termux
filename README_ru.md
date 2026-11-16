@@ -472,11 +472,11 @@ grun --shell vkmark
 
 - `termux-compat/install-freedreno-kgsl.sh`,
   `termux-compat/install-firefox-webgl.sh`, `termux-compat/mango-gpu-run`,
-  `termux-compat/mango-firefox`, `termux-compat/fix-mango-config.sh`,
-  `termux-compat/install-benchmark-fixes.sh`,
+  `termux-compat/mango-firefox`, `termux-compat/noctalia-exec`,
+  `termux-compat/fix-mango-config.sh`, `termux-compat/install-benchmark-fixes.sh`,
   `termux-compat/build-arch-turnip.sh`.
 - Установленные вспомогательные интеграции: `mango-integrate`, `mango-noctalia`,
-  `mango-gpu-run`, `mango-firefox`.
+  `noctalia-exec`, `mango-gpu-run`, `mango-firefox`.
 - `termux-compat/scenefx-termux.patch`.
 - `termux/x11-check.c`.
 - `TERMUX_NOCTALIA.md` и `TERMUX_NOCTALIA_ru.md`: устаревшие proot/debug
@@ -486,17 +486,23 @@ grun --shell vkmark
 ### Универсальные интеграции по умолчанию
 
 - `meson install` безусловно устанавливает `mango-integrate`, `mango-noctalia`,
-  `mango-gpu-run` и `mango-firefox` в Termux; необязательные пакеты не нужны во
-  время сборки.
+  `noctalia-exec`, `mango-gpu-run` и `mango-firefox` в Termux; необязательные
+  пакеты не нужны во время сборки.
 - `mango-integrate` идемпотентен: восстанавливает терминальные `.desktop`-файлы
   до обычного `Exec=kitty`/`Exec=foot`, ставит прямой launcher Firefox,
   устанавливает нативный launcher Noctalia, переносит конфигурацию Noctalia,
   копирует недостающие обои из `root/Walls` в `$HOME/Walls`, исправляет пути
-  `/root/` в настройках, делает однократные резервные копии и создаёт
-  shell-конфиги kitty/foot/ghostty только если их нет.
+  `/root/` в настройках, делает однократные резервные копии и дописывает
+  shell-команду kitty/foot/ghostty, если её ещё нет.
+- Noctalia запускает приложения через `noctalia-exec`
+  (`[shell] launch_apps_custom_command = "noctalia-exec $CMD"`). Обёртка
+  отбрасывает rootfs/glibc-пути EGL, Vulkan, DRI, QML и Qt, сохраняет живые
+  `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR`, адрес D-Bus и нативные
+  KGSL/Turnip-переопределения, а затем восстанавливает нативные `PREFIX`,
+  `HOME`, `PATH`, `SHELL=$PREFIX/bin/fish`, `TERM` и XDG-каталоги.
 - Поддерживаемые терминалы: kitty, kitty-open, foot, footclient, foot-server и
   ghostty. Их `.desktop`-файлы получают обычный `Exec=kitty`, `Exec=foot` и т. п.
-  без `/usr/bin/env` и без очистки `LD_*`.
+  без `/usr/bin/env` и без переписывания `LD_*`.
 - `mango-noctalia` находит rootfs (`installed-rootfs/*` или
   `containers/*/rootfs`), готовит пропатченную нативную копию
   `$PREFIX/libexec/mango-termux/noctalia-native` и запускает её напрямую в
@@ -1001,13 +1007,14 @@ grun --shell vkmark
   или изменений rootfs.
 - Noctalia не получает `LD_LIBRARY_PATH` или `LD_PRELOAD`. Ей задаются только
   EGL/Vulkan/DRI-переменные (`__EGL_VENDOR_LIBRARY_DIRS`, `VK_ICD_FILENAMES`,
-  `VK_DRIVER_FILES`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`); дочерние
-  процессы используют `HOME`, `PREFIX`, `PATH=$PREFIX/bin:/system/bin:/system/xbin`,
-  `SHELL=$PREFIX/bin/fish` (с откатом на bash), нативные XDG config/state/data и
-  конфиги из `$HOME/.config`.
+  `VK_DRIVER_FILES`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`); запускаемые ею
+  приложения проходят через `noctalia-exec`, который убирает эти rootfs-пути и
+  восстанавливает нативные `HOME`, `PREFIX`,
+  `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish`
+  (с откатом на bash), `TERM` и XDG config/state/data.
 - Ресурсное окружение:
-  `XDG_DATA_DIRS="$PREFIX/share:$ROOTFS/usr/share"`,
-  `XDG_CONFIG_DIRS="$PREFIX/etc/xdg:$ROOTFS/etc/xdg"`,
+  `XDG_DATA_DIRS="$PREFIX/share"`,
+  `XDG_CONFIG_DIRS="$PREFIX/etc/xdg"`,
   `NOCTALIA_ASSETS_DIR="$ROOTFS/usr/share/noctalia/assets"`, нативный
   `FONTCONFIG_PATH=$PREFIX/etc/fonts`, приватные rootfs EGL/Vulkan/DRI-пути; путь
   к rootfs можно переопределить через `NOCTALIA_ROOTFS`.

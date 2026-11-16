@@ -149,6 +149,8 @@ fi
 export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH SHELL
 clear_foreign_env
 
+# These point inside the rootfs and are required by Noctalia itself.  Child
+# applications are started through noctalia-exec, which drops them again.
 export __EGL_VENDOR_LIBRARY_DIRS=$egl_vendor_dir
 unset __EGL_VENDOR_LIBRARY_FILENAMES
 export VK_ICD_FILENAMES=$vulkan_icd_dir/freedreno_icd.aarch64.json
@@ -181,9 +183,21 @@ extend_paths() {
 	printf '%s' "$out"
 }
 
-XDG_DATA_DIRS=$(extend_paths "$PREFIX/share:$rootfs/usr/share" "${XDG_DATA_DIRS:-}")
-XDG_CONFIG_DIRS=$(extend_paths "$PREFIX/etc/xdg:$rootfs/etc/xdg" "${XDG_CONFIG_DIRS:-}")
+# Children must only see native Termux data/config roots.  The rootfs asset
+# bundle is exposed separately through NOCTALIA_ASSETS_DIR, so rootfs paths
+# never leak into applications launched from Noctalia.
+XDG_DATA_DIRS=$PREFIX/share
+XDG_CONFIG_DIRS=$PREFIX/etc/xdg
 export XDG_DATA_DIRS XDG_CONFIG_DIRS
+
+if [[ -z ${TERM:-} || $TERM == dumb ]]; then
+	TERM=xterm-256color
+fi
+export TERM
+if [[ -d $PREFIX/share/terminfo ]]; then
+	export TERMINFO=$PREFIX/share/terminfo
+fi
+export XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}
 
 export NOCTALIA_ASSETS_DIR=$rootfs/usr/share/noctalia/assets
 if [[ -d $PREFIX/etc/fonts ]]; then
