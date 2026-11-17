@@ -60,6 +60,23 @@ TMPDIR=$prefix/tmp
 PATH=$prefix/bin:/system/bin:/system/xbin
 SHELL=$prefix/bin/fish
 [[ -x $SHELL ]] || SHELL=$prefix/bin/bash
+
+# Noctalia resolves $TERMINAL first. Keep an existing usable value; otherwise
+# fall back to a terminal that is actually installed in the Termux prefix.
+if [[ -z ${TERMINAL:-} || ! -x ${TERMINAL:-} ]]; then
+	unset TERMINAL
+	for candidate in ghostty kitty foot alacritty wezterm xterm; do
+		if found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
+			TERMINAL=$found
+			break
+		fi
+	done
+fi
+if [[ -n ${TERMINAL:-} && -x ${TERMINAL:-} ]]; then
+	export TERMINAL
+else
+	unset TERMINAL
+fi
 if [[ -z ${TERM:-} || $TERM == dumb ]]; then
 	TERM=xterm-256color
 fi
@@ -155,7 +172,7 @@ else
 	unset FONTCONFIG_PATH
 fi
 
-export PREFIX HOME TMPDIR PATH SHELL TERM TERMINFO \
+export PREFIX HOME TMPDIR PATH SHELL TERMINAL TERM TERMINFO \
 	XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME \
 	XDG_CACHE_HOME XDG_DATA_DIRS XDG_CONFIG_DIRS XDG_SESSION_TYPE \
 	XDG_CURRENT_DESKTOP

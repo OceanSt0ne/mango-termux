@@ -803,12 +803,11 @@ void handle_keyboard_key(struct wl_listener *listener, void *data) {
 	/* don't pass when popup is focused
 	 * this is better than having popups (like fuzzel or wmenu) closing
 	 * while typing in a passed keybind */
-	pass = (xdg_surface && xdg_surface->role != WLR_XDG_SURFACE_ROLE_POPUP) ||
-		   !last_surface
+	pass = !(xdg_surface &&
+	         xdg_surface->role == WLR_XDG_SURFACE_ROLE_POPUP);
 #ifdef XWAYLAND
-		   || xsurface
+	pass = pass || xsurface;
 #endif
-		;
 	/* passed keys don't get repeated */
 	if (pass && syms)
 		hit_global = keyboard_process_global_keypress(

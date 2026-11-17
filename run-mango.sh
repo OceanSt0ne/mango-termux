@@ -66,6 +66,28 @@ export SHELL
 export MOZ_ENABLE_WAYLAND GDK_BACKEND QT_QPA_PLATFORM SDL_VIDEODRIVER
 export ELECTRON_OZONE_PLATFORM_HINT XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
 
+# Make sure the Termux prefix is searchable even when the caller inherited a
+# minimal PATH, so the terminal probe below sees the installed binaries.
+case ":$PATH:" in
+  *":$prefix/bin:"*) ;;
+  *) PATH="$prefix/bin${PATH:+:$PATH}" ;;
+esac
+export PATH
+
+# Noctalia and other launchers resolve $TERMINAL first.  Prefer an explicit
+# value, then the terminals shipped by Termux.
+if [[ -z ${TERMINAL:-} ]]; then
+  for candidate in ghostty kitty foot alacritty wezterm xterm; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      TERMINAL="$(command -v "$candidate")"
+      break
+    fi
+  done
+fi
+if [[ -n ${TERMINAL:-} ]]; then
+  export TERMINAL
+fi
+
 priv_bin="$prefix/lib/mango-termux/mango"
 
 # Xwayland on Android: DRI3/DRM ioctls can abort the X socket with
@@ -245,6 +267,7 @@ persist_session_env() {
       PREFIX \
       TMPDIR \
       SHELL \
+      TERMINAL \
       XDG_CURRENT_DESKTOP \
       XDG_SESSION_TYPE \
       MOZ_ENABLE_WAYLAND \
