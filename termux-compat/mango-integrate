@@ -871,6 +871,72 @@ ensure_terminal_shell() {
 	fi
 }
 
+detect_terminal() {
+	local candidate
+	for candidate in ghostty kitty foot alacritty wezterm xterm; do
+		if command -v "$candidate" >/dev/null 2>&1; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
+	done
+	return 1
+}
+
+ensure_terminal_env() {
+	local file="$config/mango/env.conf"
+	local terminal tmp
+
+	if ! terminal="$(detect_terminal)"; then
+		info "no supported terminal found; TERMINAL env is not set"
+		return 0
+	fi
+
+	if [[ -f "$file" ]] && grep -q '^env=TERMINAL,' "$file"; then
+		info "TERMINAL env already set: $file"
+		return 0
+	fi
+
+	if ! mkdir -p "${file%/*}" 2>/dev/null; then
+		warn "cannot create config directory: ${file%/*}"
+		return 0
+	fi
+
+	if [[ -e "$file" || -L "$file" ]]; then
+		if ! backup_once "$file"; then
+			return 0
+		fi
+	fi
+
+	tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $file"
+		return 0
+	}
+	if [[ -f "$file" ]]; then
+		if ! awk -v line="env=TERMINAL,$terminal" \
+			'{ print } END { print line }' "$file" >"$tmp" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot rewrite: $file"
+			return 0
+		fi
+		set_mode_from "$file" "$tmp"
+	else
+		if ! printf 'env=TERMINAL,%s\n' "$terminal" >"$tmp" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot write: $tmp"
+			return 0
+		fi
+	fi
+
+	if ! mv "$tmp" "$file" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace: $file"
+		return 0
+	fi
+
+	info "set terminal env: $file"
+	return 0
+}
+
 remove_legacy_host_bridge() {
 	if [[ -e "$bin/mango-host-run" ]]; then
 		rm -f "$bin/mango-host-run" &&
@@ -970,6 +1036,20 @@ run_check() {
 				info "OK: terminal entry: $file"
 			fi
 		done < <(discover_desktop_entries)
+
+		local terminal
+		if terminal="$(detect_terminal)"; then
+			local env_file="$config/mango/env.conf"
+			if [[ -f "$env_file" ]] && grep -q '^env=TERMINAL,' "$env_file"; then
+				info "OK: TERMINAL env: $env_file"
+			else
+				printf 'FAIL: TERMINAL env is missing: %s (found %s; run mango-integrate)\n' \
+					"$env_file" "$terminal" >&2
+				failed=1
+			fi
+		else
+			info "no supported terminal found; TERMINAL env not required"
+		fi
 	fi
 
 	if ((failed)); then
@@ -1017,6 +1097,7 @@ if ((enable_terminals)); then
 	done < <(discover_desktop_entries)
 
 	create_terminal_configs
+	ensure_terminal_env
 fi
 
 remove_legacy_host_bridge

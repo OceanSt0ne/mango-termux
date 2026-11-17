@@ -9,6 +9,20 @@ PATH=$PREFIX/bin:/system/bin:/system/xbin
 SHELL=$PREFIX/bin/fish
 [[ -x $SHELL ]] || SHELL=$PREFIX/bin/bash
 
+# Noctalia resolves $TERMINAL first; keep an existing usable value and only
+# fall back to the terminals available in the Termux prefix.
+if [[ -z ${TERMINAL:-} || ! -x ${TERMINAL:-} ]]; then
+	for candidate in ghostty kitty foot alacritty wezterm xterm; do
+		if found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
+			TERMINAL=$found
+			break
+		fi
+	done
+fi
+if [[ -n ${TERMINAL:-} ]]; then
+	export TERMINAL
+fi
+
 clear_foreign_env() {
 	unset LD_LIBRARY_PATH LD_PRELOAD LIBGL_DRIVERS_PATH GBM_BACKENDS_PATH \
 		MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER VK_DRIVER_FILES \
@@ -147,6 +161,18 @@ if [[ -f $session ]]; then
 fi
 
 export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH SHELL
+if [[ -n ${TERMINAL:-} && -x ${TERMINAL:-} ]]; then
+	export TERMINAL
+else
+	unset TERMINAL
+	for candidate in ghostty kitty foot alacritty wezterm xterm; do
+		if found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
+			TERMINAL=$found
+			export TERMINAL
+			break
+		fi
+	done
+fi
 clear_foreign_env
 
 # These point inside the rootfs and are required by Noctalia itself.  Child

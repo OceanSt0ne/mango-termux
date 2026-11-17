@@ -547,7 +547,25 @@ SHELL="$fixed_shell"
 TMPDIR="$PREFIX/tmp"
 XDG_RUNTIME_DIR="$PREFIX/tmp"
 PATH="$PREFIX/bin:/system/bin:/system/xbin"
-export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH SHELL
+
+# Noctalia resolves $TERMINAL first. Keep an existing usable value; otherwise
+# fall back to a terminal that is actually installed in the Termux prefix.
+if [[ -z ${TERMINAL:-} || ! -x ${TERMINAL:-} ]]; then
+  unset TERMINAL
+  for candidate in ghostty kitty foot alacritty wezterm xterm; do
+    if found="$(command -v "$candidate" 2>/dev/null)" && [[ -n $found ]]; then
+      TERMINAL="$found"
+      break
+    fi
+  done
+fi
+if [[ -n ${TERMINAL:-} && -x ${TERMINAL:-} ]]; then
+  export TERMINAL
+else
+  unset TERMINAL
+fi
+
+export HOME PREFIX TMPDIR XDG_RUNTIME_DIR PATH SHELL TERMINAL
 
 runtime_env="$PREFIX/libexec/mango-termux/runtime.env"
 if [[ ! -f $runtime_env ]]; then
@@ -793,6 +811,54 @@ ensure_noctalia_child_command() {
       continue
     fi
     info "routed Noctalia app launches through noctalia-exec: $file"
+  done
+}
+
+# The bar is a layer-shell surface.  Without reserve_space the compositor does
+# not shrink the usable area and client titlebars are drawn underneath it.
+ensure_noctalia_bar_reserve() {
+  local file tmp
+
+  for file in "$HOME/.local/state/noctalia/settings.toml" \
+              "$HOME/.config/noctalia/settings.toml"; do
+    [[ -f $file ]] || continue
+
+    tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+      warn "cannot create temporary file for: $file"
+      continue
+    }
+    if ! awk '
+      /^\[bar\.[^.]]+\][[:space:]]*$/ { in_bar = 1; print; next }
+      /^\[/ { in_bar = 0 }
+      in_bar && /^[[:space:]]*reserve_space[[:space:]]*=/ {
+        if ($0 !~ /=[[:space:]]*true[[:space:]]*$/) {
+          match($0, /^[[:space:]]*/)
+          print substr($0, 1, RLENGTH) "reserve_space = true"
+          next
+        }
+      }
+      { print }
+    ' "$file" >"$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      warn "cannot rewrite Noctalia settings: $file"
+      continue
+    fi
+
+    if cmp -s "$file" "$tmp"; then
+      rm -f "$tmp"
+      continue
+    fi
+    chmod --reference="$file" "$tmp" 2>/dev/null || true
+    backup_once "$file" || {
+      rm -f "$tmp"
+      continue
+    }
+    if ! mv "$tmp" "$file" 2>/dev/null; then
+      rm -f "$tmp"
+      warn "cannot replace: $file"
+      continue
+    fi
+    info "reserved space for Noctalia bars: $file"
   done
 }
 
@@ -1200,6 +1266,7 @@ patch_start_shim
 patch_mics_config
 install_launchers
 ensure_noctalia_child_command
+ensure_noctalia_bar_reserve
 warm_caches
 
 info "Noctalia is installed natively. Start it with: noctalia"

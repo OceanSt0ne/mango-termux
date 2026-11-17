@@ -492,17 +492,23 @@ grun --shell vkmark
   до обычного `Exec=kitty`/`Exec=foot`, ставит прямой launcher Firefox,
   устанавливает нативный launcher Noctalia, переносит конфигурацию Noctalia,
   копирует недостающие обои из `root/Walls` в `$HOME/Walls`, исправляет пути
-  `/root/` в настройках, делает однократные резервные копии и дописывает
-  shell-команду kitty/foot/ghostty, если её ещё нет.
+  `/root/` в настройках, делает однократные резервные копии, дописывает
+  shell-команду kitty/foot/ghostty, если её ещё нет, и добавляет
+  `env=TERMINAL,<terminal>` в `~/.config/mango/env.conf`, если такой строки нет
+  (ghostty → kitty → foot → alacritty → wezterm → xterm).
 - Noctalia запускает приложения через `noctalia-exec`
   (`[shell] launch_apps_custom_command = "noctalia-exec $CMD"`). Обёртка
   отбрасывает rootfs/glibc-пути EGL, Vulkan, DRI, QML и Qt, сохраняет живые
   `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR`, адрес D-Bus и нативные
   KGSL/Turnip-переопределения, а затем восстанавливает нативные `PREFIX`,
-  `HOME`, `PATH`, `SHELL=$PREFIX/bin/fish`, `TERM` и XDG-каталоги.
+  `HOME`, `PATH`, `SHELL=$PREFIX/bin/fish`, `TERM`, `TERMINAL` и XDG-каталоги.
 - Поддерживаемые терминалы: kitty, kitty-open, foot, footclient, foot-server и
   ghostty. Их `.desktop`-файлы получают обычный `Exec=kitty`, `Exec=foot` и т. п.
   без `/usr/bin/env` и без переписывания `LD_*`.
+- `run-mango.sh` и лаунчер Noctalia экспортируют `TERMINAL` по тому же
+  приоритету, а строка в `env.conf`, записанная `mango-integrate`, служит
+  независимой страховкой на стороне Mango; поэтому лаунчеры приложений открывают
+  нативный терминал Termux, даже если один из экспортёров обойдён.
 - `mango-noctalia` находит rootfs (`installed-rootfs/*` или
   `containers/*/rootfs`), готовит пропатченную нативную копию
   `$PREFIX/libexec/mango-termux/noctalia-native` и запускает её напрямую в
@@ -716,7 +722,8 @@ mango-termux
   включая установку и миграцию нативной Noctalia без proot.
 - Экспортирует нативный `PREFIX`; задаёт `TMPDIR=$PREFIX/tmp`; нормализует
   `XDG_RUNTIME_DIR` под `$PREFIX`; задаёт `SHELL=$PREFIX/bin/fish` с откатом на
-  `$PREFIX/bin/bash`.
+  `$PREFIX/bin/bash` и экспортирует `TERMINAL` с первым найденным терминалом
+  (ghostty → kitty → foot) в соответствии с `env.conf`.
 - Экспортирует универсальные GUI-переменные: `MOZ_ENABLE_WAYLAND=1`,
   `GDK_BACKEND=wayland,x11`, `QT_QPA_PLATFORM=wayland;xcb`,
   `SDL_VIDEODRIVER=wayland`, `ELECTRON_OZONE_PLATFORM_HINT=auto`,
@@ -1011,7 +1018,7 @@ grun --shell vkmark
   приложения проходят через `noctalia-exec`, который убирает эти rootfs-пути и
   восстанавливает нативные `HOME`, `PREFIX`,
   `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish`
-  (с откатом на bash), `TERM` и XDG config/state/data.
+  (с откатом на bash), `TERM`, `TERMINAL` и XDG config/state/data.
 - Ресурсное окружение:
   `XDG_DATA_DIRS="$PREFIX/share"`,
   `XDG_CONFIG_DIRS="$PREFIX/etc/xdg"`,
@@ -1030,6 +1037,10 @@ grun --shell vkmark
   `/root/` на нативный home в `~/.local/state/noctalia/settings.toml` и
   `~/.config/noctalia/settings.toml`, поэтому предупреждение о старом пути к
   обоям исчезает.
+- Для верхней панели Noctalia задайте `reserve_space = true` в `settings.toml`,
+  чтобы окна не заходили под панель. MangoWM больше не передаёт клавиатурный
+  фокус верхним/нижним layer-панелям при их появлении (map): автоматически его
+  получают только overlay-лаунчеры, остальные панели фокусируются по клику.
 - `mango-integrate --check` проверяет нативную Noctalia и отсутствие удалённого
   host-моста в терминальных записях.
 - `TERMUX_NOCTALIA.md` и `TERMUX_NOCTALIA_ru.md` — устаревшие proot/debug

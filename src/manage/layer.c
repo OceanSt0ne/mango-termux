@@ -291,10 +291,14 @@ void handle_layer_surface_commit(struct wl_listener *listener, void *data) {
 		l->layer_surface->current = l->layer_surface->pending;
 		arrange_layers(l->mon);
 		l->layer_surface->current = old_state;
-		// Focus is only set before map for interactive-on-demand layers.
+		// Focus is only set before map for interactive-on-demand overlay layers
+		// (launchers/menus). Bars and docks live in the top/bottom layers and must
+		// not steal keyboard focus from the active client: the user still gets
+		// focus there on click (see pointer.c).
 		if (!server.exclusive_focus &&
 			l->layer_surface->current.keyboard_interactive ==
-				ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND) {
+				ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND &&
+			l->layer_surface->current.layer == ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY) {
 			layer_focus(l);
 		}
 		if (mapped_changed) {
