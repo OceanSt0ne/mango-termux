@@ -12,8 +12,14 @@ SHELL=$PREFIX/bin/fish
 # Noctalia resolves $TERMINAL first; keep an existing usable value and only
 # fall back to the terminals available in the Termux prefix.
 if [[ -z ${TERMINAL:-} || ! -x ${TERMINAL:-} ]]; then
-	for candidate in ghostty kitty foot alacritty wezterm xterm; do
-		if found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
+	for candidate in "$PREFIX/bin/noctalia-terminal" foot kitty ghostty \
+		alacritty wezterm xterm; do
+		if [[ $candidate == /* ]]; then
+			if [[ -x $candidate ]]; then
+				TERMINAL=$candidate
+				break
+			fi
+		elif found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
 			TERMINAL=$found
 			break
 		fi
@@ -28,6 +34,11 @@ clear_foreign_env() {
 		MESA_LOADER_DRIVER_OVERRIDE GALLIUM_DRIVER VK_DRIVER_FILES \
 		VK_ICD_FILENAMES __EGL_VENDOR_LIBRARY_DIRS \
 		__EGL_VENDOR_LIBRARY_FILENAMES FD_KGSL_DMABUF EGL_PLATFORM
+	unset GTK_IM_MODULE GTK_IM_MODULES QT_IM_MODULE QT_IM_MODULES \
+		SDL_IM_MODULE GLFW_IM_MODULE XMODIFIERS INPUT_METHOD
+	unset XKB_CONFIG_EXTRA_PATH XKB_DEFAULT_LAYOUT XKB_DEFAULT_VARIANT \
+		XKB_DEFAULT_OPTIONS XKB_DEFAULT_RULES XKB_DEFAULT_MODEL \
+		XKB_CONFIG_ROOT
 	local name
 	while IFS= read -r name; do
 		unset "$name"
@@ -165,8 +176,15 @@ if [[ -n ${TERMINAL:-} && -x ${TERMINAL:-} ]]; then
 	export TERMINAL
 else
 	unset TERMINAL
-	for candidate in ghostty kitty foot alacritty wezterm xterm; do
-		if found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
+	for candidate in "$PREFIX/bin/noctalia-terminal" foot kitty ghostty \
+		alacritty wezterm xterm; do
+		if [[ $candidate == /* ]]; then
+			if [[ -x $candidate ]]; then
+				TERMINAL=$candidate
+				export TERMINAL
+				break
+			fi
+		elif found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
 			TERMINAL=$found
 			export TERMINAL
 			break
@@ -174,6 +192,18 @@ else
 	done
 fi
 clear_foreign_env
+
+# Noctalia runs with rootfs/glibc XKB paths; native clients must use the
+# Termux xkeyboard-config tree and the layout exported by run-mango.sh.
+if [[ -d $PREFIX/share/X11/xkb ]]; then
+	XKB_CONFIG_ROOT=$PREFIX/share/X11/xkb
+	export XKB_CONFIG_ROOT
+fi
+XKB_DEFAULT_LAYOUT=${XKB_DEFAULT_LAYOUT:-us,ru}
+XKB_DEFAULT_OPTIONS=${XKB_DEFAULT_OPTIONS:-grp:win_space_toggle}
+XKB_DEFAULT_RULES=${XKB_DEFAULT_RULES:-evdev}
+XKB_DEFAULT_MODEL=${XKB_DEFAULT_MODEL:-pc105}
+export XKB_DEFAULT_LAYOUT XKB_DEFAULT_OPTIONS XKB_DEFAULT_RULES XKB_DEFAULT_MODEL
 
 # These point inside the rootfs and are required by Noctalia itself.  Child
 # applications are started through noctalia-exec, which drops them again.

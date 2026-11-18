@@ -1,0 +1,18 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Noctalia starts $TERMINAL directly for Terminal=true/runInTerminal, bypassing
+# launch_apps_custom_command.  Route it through noctalia-exec and prefer the
+# Wayland-native foot (ghostty/kitty are X11 builds and need Xwayland).
+set -u
+prefix=${PREFIX:-/data/data/com.termux/files/usr}
+exec_wrapper=$prefix/bin/noctalia-exec
+if [[ ! -x $exec_wrapper ]]; then
+	printf 'noctalia-terminal: missing %s\n' "$exec_wrapper" >&2
+	exit 1
+fi
+for candidate in "$prefix/bin/foot" "$prefix/bin/kitty" "$prefix/bin/ghostty"; do
+	if [[ -x $candidate ]]; then
+		exec "$exec_wrapper" "$candidate" "$@"
+	fi
+done
+printf 'noctalia-terminal: no supported terminal found in %s/bin\n' "$prefix" >&2
+exit 1

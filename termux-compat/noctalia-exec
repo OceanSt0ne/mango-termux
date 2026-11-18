@@ -65,8 +65,14 @@ SHELL=$prefix/bin/fish
 # fall back to a terminal that is actually installed in the Termux prefix.
 if [[ -z ${TERMINAL:-} || ! -x ${TERMINAL:-} ]]; then
 	unset TERMINAL
-	for candidate in ghostty kitty foot alacritty wezterm xterm; do
-		if found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
+	for candidate in "$prefix/bin/noctalia-terminal" foot kitty ghostty \
+		alacritty wezterm xterm; do
+		if [[ $candidate == /* ]]; then
+			if [[ -x $candidate ]]; then
+				TERMINAL=$candidate
+				break
+			fi
+		elif found=$(command -v "$candidate" 2>/dev/null) && [[ -n $found ]]; then
 			TERMINAL=$found
 			break
 		fi
@@ -99,6 +105,23 @@ unset NOCTALIA_ASSETS_DIR NOCTALIA_ROOTFS NOCTALIA_LOADER NOCTALIA_RPATH \
 	NOCTALIA_GBM_BACKENDS NOCTALIA_HAS_QT NOCTALIA_QML_CACHE \
 	NOCTALIA_QML_IMPORT NOCTALIA_QT_PLUGIN NOCTALIA_QT_PLATFORM_PLUGIN \
 	NOCTALIA_QT_LOGGING NOCTALIA_DBUS_WRAPPED
+unset GTK_IM_MODULE GTK_IM_MODULES QT_IM_MODULE QT_IM_MODULES \
+	SDL_IM_MODULE GLFW_IM_MODULE XMODIFIERS INPUT_METHOD
+unset XKB_CONFIG_EXTRA_PATH XKB_DEFAULT_LAYOUT XKB_DEFAULT_VARIANT \
+	XKB_DEFAULT_OPTIONS XKB_DEFAULT_RULES XKB_DEFAULT_MODEL \
+	XKB_CONFIG_ROOT
+
+# Noctalia runs with rootfs/glibc XKB paths; native clients must use the
+# Termux xkeyboard-config tree and the layout exported by run-mango.sh.
+if [[ -d $prefix/share/X11/xkb ]]; then
+	XKB_CONFIG_ROOT=$prefix/share/X11/xkb
+	export XKB_CONFIG_ROOT
+fi
+XKB_DEFAULT_LAYOUT=${XKB_DEFAULT_LAYOUT:-us,ru}
+XKB_DEFAULT_OPTIONS=${XKB_DEFAULT_OPTIONS:-grp:win_space_toggle}
+XKB_DEFAULT_RULES=${XKB_DEFAULT_RULES:-evdev}
+XKB_DEFAULT_MODEL=${XKB_DEFAULT_MODEL:-pc105}
+export XKB_DEFAULT_LAYOUT XKB_DEFAULT_OPTIONS XKB_DEFAULT_RULES XKB_DEFAULT_MODEL
 
 # Rebuild the native Freedreno/KGSL (or stock Mesa) paths from real Termux
 # files only.  Rootfs and glibc-loader directories never pass this filter.
@@ -175,7 +198,8 @@ fi
 export PREFIX HOME TMPDIR PATH SHELL TERMINAL TERM TERMINFO \
 	XDG_RUNTIME_DIR XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME \
 	XDG_CACHE_HOME XDG_DATA_DIRS XDG_CONFIG_DIRS XDG_SESSION_TYPE \
-	XDG_CURRENT_DESKTOP
+	XDG_CURRENT_DESKTOP XKB_CONFIG_ROOT XKB_DEFAULT_LAYOUT \
+	XKB_DEFAULT_OPTIONS XKB_DEFAULT_RULES XKB_DEFAULT_MODEL
 for name in WAYLAND_DISPLAY DISPLAY DBUS_SESSION_BUS_ADDRESS \
 	MANGO_INSTANCE_SIGNATURE XCURSOR_THEME XCURSOR_SIZE; do
 	[[ -n ${!name:-} ]] && export "$name"
