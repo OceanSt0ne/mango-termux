@@ -873,7 +873,11 @@ ensure_terminal_shell() {
 
 detect_terminal() {
 	local candidate
-	for candidate in ghostty kitty foot alacritty wezterm xterm; do
+	if command -v noctalia-terminal >/dev/null 2>&1; then
+		printf '%s\n' noctalia-terminal
+		return 0
+	fi
+	for candidate in foot kitty ghostty alacritty wezterm xterm; do
 		if command -v "$candidate" >/dev/null 2>&1; then
 			printf '%s\n' "$candidate"
 			return 0
@@ -884,7 +888,7 @@ detect_terminal() {
 
 ensure_terminal_env() {
 	local file="$config/mango/env.conf"
-	local terminal tmp
+	local terminal tmp current
 
 	if ! terminal="$(detect_terminal)"; then
 		info "no supported terminal found; TERMINAL env is not set"
@@ -892,7 +896,50 @@ ensure_terminal_env() {
 	fi
 
 	if [[ -f "$file" ]] && grep -q '^env=TERMINAL,' "$file"; then
-		info "TERMINAL env already set: $file"
+		current="$(awk '
+			/^env=TERMINAL,/ {
+				line = $0
+				sub(/^env=TERMINAL,/, "", line)
+				print line
+				exit
+			}
+		' "$file" 2>/dev/null)"
+		if [[ "$terminal" != noctalia-terminal || "$current" == noctalia-terminal ]]; then
+			info "TERMINAL env already set: $file ($current)"
+			return 0
+		fi
+		if ! mkdir -p "${file%/*}" 2>/dev/null; then
+			warn "cannot create config directory: ${file%/*}"
+			return 0
+		fi
+		if ! backup_once "$file"; then
+			return 0
+		fi
+		tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+			warn "cannot create temporary file for: $file"
+			return 0
+		}
+		if ! awk -v line="env=TERMINAL,noctalia-terminal" '
+			/^env=TERMINAL,/ {
+				if (!done) {
+					print line
+					done = 1
+				}
+				next
+			}
+			{ print }
+		' "$file" >"$tmp" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot rewrite: $file"
+			return 0
+		fi
+		set_mode_from "$file" "$tmp"
+		if ! mv "$tmp" "$file" 2>/dev/null; then
+			rm -f "$tmp"
+			warn "cannot replace: $file"
+			return 0
+		fi
+		info "migrated terminal env to noctalia-terminal: $file"
 		return 0
 	fi
 
@@ -1037,11 +1084,38 @@ run_check() {
 			fi
 		done < <(discover_desktop_entries)
 
-		local terminal
-		if terminal="$(detect_terminal)"; then
-			local env_file="$config/mango/env.conf"
+		local terminal env_file value
+		terminal="$(detect_terminal)" || terminal=""
+		env_file="$config/mango/env.conf"
+		if [[ -n "$terminal" ]]; then
 			if [[ -f "$env_file" ]] && grep -q '^env=TERMINAL,' "$env_file"; then
-				info "OK: TERMINAL env: $env_file"
+				value="$(awk '
+					/^env=TERMINAL,/ {
+						line = $0
+						sub(/^env=TERMINAL,/, "", line)
+						print line
+						exit
+					}
+				' "$env_file" 2>/dev/null)"
+				if [[ -z "$value" ]]; then
+					printf 'FAIL: TERMINAL env has an empty value: %s\n' \
+						"$env_file" >&2
+					failed=1
+				elif [[ "$value" == /* ]]; then
+					if [[ -x "$value" ]]; then
+						info "OK: TERMINAL env: $env_file ($value)"
+					else
+						printf 'FAIL: TERMINAL env does not resolve: %s=%s\n' \
+							"$env_file" "$value" >&2
+						failed=1
+					fi
+				elif command -v "$value" >/dev/null 2>&1; then
+					info "OK: TERMINAL env: $env_file ($value)"
+				else
+					printf 'FAIL: TERMINAL env does not resolve: %s=%s\n' \
+						"$env_file" "$value" >&2
+					failed=1
+				fi
 			else
 				printf 'FAIL: TERMINAL env is missing: %s (found %s; run mango-integrate)\n' \
 					"$env_file" "$terminal" >&2

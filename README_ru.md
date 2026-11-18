@@ -473,10 +473,11 @@ grun --shell vkmark
 - `termux-compat/install-freedreno-kgsl.sh`,
   `termux-compat/install-firefox-webgl.sh`, `termux-compat/mango-gpu-run`,
   `termux-compat/mango-firefox`, `termux-compat/noctalia-exec`,
-  `termux-compat/fix-mango-config.sh`, `termux-compat/install-benchmark-fixes.sh`,
+  `termux-compat/noctalia-terminal`, `termux-compat/fix-mango-config.sh`,
+  `termux-compat/install-benchmark-fixes.sh`,
   `termux-compat/build-arch-turnip.sh`.
 - Установленные вспомогательные интеграции: `mango-integrate`, `mango-noctalia`,
-  `noctalia-exec`, `mango-gpu-run`, `mango-firefox`.
+  `noctalia-exec`, `noctalia-terminal`, `mango-gpu-run`, `mango-firefox`.
 - `termux-compat/scenefx-termux.patch`.
 - `termux/x11-check.c`.
 - `TERMUX_NOCTALIA.md` и `TERMUX_NOCTALIA_ru.md`: устаревшие proot/debug
@@ -486,8 +487,8 @@ grun --shell vkmark
 ### Универсальные интеграции по умолчанию
 
 - `meson install` безусловно устанавливает `mango-integrate`, `mango-noctalia`,
-  `noctalia-exec`, `mango-gpu-run` и `mango-firefox` в Termux; необязательные
-  пакеты не нужны во время сборки.
+  `noctalia-exec`, `noctalia-terminal`, `mango-gpu-run` и `mango-firefox` в
+  Termux; необязательные пакеты не нужны во время сборки.
 - `mango-integrate` идемпотентен: восстанавливает терминальные `.desktop`-файлы
   до обычного `Exec=kitty`/`Exec=foot`, ставит прямой launcher Firefox,
   устанавливает нативный launcher Noctalia, переносит конфигурацию Noctalia,
@@ -495,20 +496,32 @@ grun --shell vkmark
   `/root/` в настройках, делает однократные резервные копии, дописывает
   shell-команду kitty/foot/ghostty, если её ещё нет, и добавляет
   `env=TERMINAL,<terminal>` в `~/.config/mango/env.conf`, если такой строки нет
-  (ghostty → kitty → foot → alacritty → wezterm → xterm).
+  (noctalia-terminal при наличии, затем foot → kitty → ghostty → alacritty →
+  wezterm → xterm). Существующая строка сохраняется, кроме случая, когда доступен
+  `noctalia-terminal`: тогда значение один раз мигрируется на обёртку.
 - Noctalia запускает приложения через `noctalia-exec`
   (`[shell] launch_apps_custom_command = "noctalia-exec $CMD"`). Обёртка
-  отбрасывает rootfs/glibc-пути EGL, Vulkan, DRI, QML и Qt, сохраняет живые
-  `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR`, адрес D-Bus и нативные
-  KGSL/Turnip-переопределения, а затем восстанавливает нативные `PREFIX`,
-  `HOME`, `PATH`, `SHELL=$PREFIX/bin/fish`, `TERM`, `TERMINAL` и XDG-каталоги.
+  отбрасывает rootfs/glibc-пути EGL, Vulkan, DRI, QML и Qt, а также
+  `GTK_IM_MODULE`, `QT_IM_MODULE`/`QT_IM_MODULES`, `SDL_IM_MODULE`,
+  `GLFW_IM_MODULE`, `XMODIFIERS`, `INPUT_METHOD` и унаследованные `XKB_*`,
+  сохраняет живые `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR`, адрес D-Bus и
+  нативные KGSL/Turnip-переопределения, а затем восстанавливает нативные
+  `PREFIX`, `HOME`, `PATH`, `SHELL=$PREFIX/bin/fish`, `TERM`, `TERMINAL` и
+  XDG-каталоги и выдаёт детям нативный `XKB_CONFIG_ROOT=$PREFIX/share/X11/xkb`.
 - Поддерживаемые терминалы: kitty, kitty-open, foot, footclient, foot-server и
   ghostty. Их `.desktop`-файлы получают обычный `Exec=kitty`, `Exec=foot` и т. п.
   без `/usr/bin/env` и без переписывания `LD_*`.
 - `run-mango.sh` и лаунчер Noctalia экспортируют `TERMINAL` по тому же
-  приоритету, а строка в `env.conf`, записанная `mango-integrate`, служит
-  независимой страховкой на стороне Mango; поэтому лаунчеры приложений открывают
-  нативный терминал Termux, даже если один из экспортёров обойдён.
+  приоритету (`noctalia-terminal` при наличии, затем `foot`, `kitty`, `ghostty`,
+  `alacritty`, `wezterm`, `xterm`), а строка в `env.conf`, записанная
+  `mango-integrate`, служит независимой страховкой на стороне Mango; поэтому
+  лаунчеры приложений открывают нативный терминал Termux, даже если один из
+  экспортёров обойдён.
+- `$PREFIX/bin/noctalia-terminal` направляет `runInTerminal` Noctalia через
+  `noctalia-exec`, поэтому `$TERMINAL` композитора получает очищенное нативное
+  окружение; обёртка предпочитает Wayland-нативный `foot`, а `mango-integrate`
+  записывает её как `env=TERMINAL,noctalia-terminal`, мигрируя старую строку
+  `env=TERMINAL,ghostty`.
 - `mango-noctalia` находит rootfs (`installed-rootfs/*` или
   `containers/*/rootfs`), готовит пропатченную нативную копию
   `$PREFIX/libexec/mango-termux/noctalia-native` и запускает её напрямую в
@@ -723,7 +736,12 @@ mango-termux
 - Экспортирует нативный `PREFIX`; задаёт `TMPDIR=$PREFIX/tmp`; нормализует
   `XDG_RUNTIME_DIR` под `$PREFIX`; задаёт `SHELL=$PREFIX/bin/fish` с откатом на
   `$PREFIX/bin/bash` и экспортирует `TERMINAL` с первым найденным терминалом
-  (ghostty → kitty → foot) в соответствии с `env.conf`.
+  (`noctalia-terminal` → foot → kitty → ghostty → alacritty → wezterm → xterm) в
+  соответствии с `env.conf`.
+- Экспортирует нативные XKB-данные для композитора и его детей:
+  `XKB_CONFIG_ROOT=$PREFIX/share/X11/xkb`, `XKB_DEFAULT_LAYOUT=us,ru`,
+  `XKB_DEFAULT_OPTIONS=grp:win_space_toggle`, `XKB_DEFAULT_RULES=evdev` и
+  `XKB_DEFAULT_MODEL=pc105`.
 - Экспортирует универсальные GUI-переменные: `MOZ_ENABLE_WAYLAND=1`,
   `GDK_BACKEND=wayland,x11`, `QT_QPA_PLATFORM=wayland;xcb`,
   `SDL_VIDEODRIVER=wayland`, `ELECTRON_OZONE_PLATFORM_HINT=auto`,
@@ -778,6 +796,8 @@ mango-termux
 | `MANGO_SKIP_INTEGRATIONS` | `1` пропускает автоматический запуск `mango-integrate` в `build-termux.sh`. |
 | `MANGO_SKIP_FIREFOX_FIX` | `1` передаёт `--no-firefox` в `mango-integrate` из `build-termux.sh`. |
 | `NOCTALIA_ROOTFS` | Явный путь к rootfs Arch с `usr/bin/noctalia`; иначе выполняется поиск в proot-distro. При отсутствии пригодного rootfs установщик без флагов запускает авто-bootstrap (`proot-distro` + `pacman`), если не указан `--no-bootstrap`; явный непригодный путь завершается ошибкой без автоустановки. |
+| `XKB_CONFIG_ROOT` | Корень нативных XKB-данных; `run-mango.sh` и `noctalia-exec` задают `$PREFIX/share/X11/xkb`. |
+| `XKB_DEFAULT_LAYOUT`, `XKB_DEFAULT_OPTIONS`, `XKB_DEFAULT_RULES`, `XKB_DEFAULT_MODEL` | Нативные значения по умолчанию: `us,ru`, `grp:win_space_toggle`, `evdev`, `pc105`. |
 | `MESA_KGSL_DIR` | Переопределяет каталог приватной установки KGSL для установщика. |
 | `PROOT_DISTRO_NAME` | Контейнер Arch proot для опциональных скриптов Turnip/бенчмарков. |
 | `JOBS`, `MESA_BUILD_DIR` | Параллелизм сборки Arch Turnip и рабочий каталог. |
@@ -1016,9 +1036,11 @@ grun --shell vkmark
   EGL/Vulkan/DRI-переменные (`__EGL_VENDOR_LIBRARY_DIRS`, `VK_ICD_FILENAMES`,
   `VK_DRIVER_FILES`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH`); запускаемые ею
   приложения проходят через `noctalia-exec`, который убирает эти rootfs-пути и
+  любые rootfs/Mango-значения input method и `XKB_*`, а затем
   восстанавливает нативные `HOME`, `PREFIX`,
   `PATH=$PREFIX/bin:/system/bin:/system/xbin`, `SHELL=$PREFIX/bin/fish`
-  (с откатом на bash), `TERM`, `TERMINAL` и XDG config/state/data.
+  (с откатом на bash), `TERM`, `TERMINAL`, XDG config/state/data и нативный
+  `XKB_CONFIG_ROOT=$PREFIX/share/X11/xkb`.
 - Ресурсное окружение:
   `XDG_DATA_DIRS="$PREFIX/share"`,
   `XDG_CONFIG_DIRS="$PREFIX/etc/xdg"`,

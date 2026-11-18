@@ -74,19 +74,37 @@ case ":$PATH:" in
 esac
 export PATH
 
-# Noctalia and other launchers resolve $TERMINAL first.  Prefer an explicit
-# value, then the terminals shipped by Termux.
+# Noctalia and other launchers resolve $TERMINAL first.  Prefer the clean
+# native wrapper (it routes through noctalia-exec and prefers Wayland-native
+# foot), then the terminals shipped by Termux.
 if [[ -z ${TERMINAL:-} ]]; then
-  for candidate in ghostty kitty foot alacritty wezterm xterm; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      TERMINAL="$(command -v "$candidate")"
-      break
-    fi
-  done
+  if [[ -x $prefix/bin/noctalia-terminal ]]; then
+    TERMINAL=$prefix/bin/noctalia-terminal
+  else
+    for candidate in foot kitty ghostty alacritty wezterm xterm; do
+      if command -v "$candidate" >/dev/null 2>&1; then
+        TERMINAL="$(command -v "$candidate")"
+        break
+      fi
+    done
+  fi
 fi
 if [[ -n ${TERMINAL:-} ]]; then
   export TERMINAL
 fi
+
+# Native XKB data and defaults.  MangoWM itself reads input.conf, but
+# libxkbcommon clients and XWayland also consult these variables; never let a
+# rootfs/glibc xkeyboard-config tree leak into the session.
+if [[ -d $prefix/share/X11/xkb ]]; then
+  XKB_CONFIG_ROOT=$prefix/share/X11/xkb
+  export XKB_CONFIG_ROOT
+fi
+: "${XKB_DEFAULT_LAYOUT:=us,ru}"
+: "${XKB_DEFAULT_OPTIONS:=grp:win_space_toggle}"
+: "${XKB_DEFAULT_RULES:=evdev}"
+: "${XKB_DEFAULT_MODEL:=pc105}"
+export XKB_DEFAULT_LAYOUT XKB_DEFAULT_OPTIONS XKB_DEFAULT_RULES XKB_DEFAULT_MODEL
 
 priv_bin="$prefix/lib/mango-termux/mango"
 
@@ -268,6 +286,11 @@ persist_session_env() {
       TMPDIR \
       SHELL \
       TERMINAL \
+      XKB_CONFIG_ROOT \
+      XKB_DEFAULT_LAYOUT \
+      XKB_DEFAULT_OPTIONS \
+      XKB_DEFAULT_RULES \
+      XKB_DEFAULT_MODEL \
       XDG_CURRENT_DESKTOP \
       XDG_SESSION_TYPE \
       MOZ_ENABLE_WAYLAND \
@@ -294,7 +317,9 @@ persist_session_env() {
       FD_KGSL_DMABUF \
       MANGO_XWAYLAND_GLAMOR \
       XWAYLAND_NO_GLAMOR \
-      LIBGL_DRI3_DISABLE; do
+      LIBGL_DRI3_DISABLE \
+      LANG \
+      LC_CTYPE; do
       if [[ -n "${!var:-}" ]]; then
         printf 'export %s=%q\n' "$var" "${!var}"
       fi

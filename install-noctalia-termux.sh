@@ -511,7 +511,12 @@ clear_foreign_env() {
     MESA_DEBUG LIBGL_ALWAYS_SOFTWARE MESA_GL_VERSION_OVERRIDE \
     vblank_mode ZINK_DEBUG QML2_IMPORT_PATH QML_IMPORT_PATH \
     QML_DISK_CACHE_PATH QSG_RHI_BACKEND QT_QUICK_BACKEND \
-    QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH QT_LOGGING_RULES
+    QT_PLUGIN_PATH QT_QPA_PLATFORM_PLUGIN_PATH QT_LOGGING_RULES \
+    GTK_IM_MODULE GTK_IM_MODULES QT_IM_MODULE QT_IM_MODULES \
+    SDL_IM_MODULE GLFW_IM_MODULE XMODIFIERS INPUT_METHOD \
+    XKB_CONFIG_EXTRA_PATH XKB_DEFAULT_LAYOUT XKB_DEFAULT_VARIANT \
+    XKB_DEFAULT_OPTIONS XKB_DEFAULT_RULES XKB_DEFAULT_MODEL \
+    XKB_CONFIG_ROOT
   local name
   while IFS= read -r name; do
     unset "$name"
@@ -548,12 +553,31 @@ TMPDIR="$PREFIX/tmp"
 XDG_RUNTIME_DIR="$PREFIX/tmp"
 PATH="$PREFIX/bin:/system/bin:/system/xbin"
 
+# Noctalia runs with rootfs/glibc XKB paths; native clients must use the
+# Termux xkeyboard-config tree and the layout exported by run-mango.sh.
+export_native_xkb() {
+  if [[ -d $PREFIX/share/X11/xkb ]]; then
+    export XKB_CONFIG_ROOT="$PREFIX/share/X11/xkb"
+  fi
+  export XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us,ru}"
+  export XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-grp:win_space_toggle}"
+  export XKB_DEFAULT_RULES="${XKB_DEFAULT_RULES:-evdev}"
+  export XKB_DEFAULT_MODEL="${XKB_DEFAULT_MODEL:-pc105}"
+}
+export_native_xkb
+
 # Noctalia resolves $TERMINAL first. Keep an existing usable value; otherwise
 # fall back to a terminal that is actually installed in the Termux prefix.
 if [[ -z ${TERMINAL:-} || ! -x ${TERMINAL:-} ]]; then
   unset TERMINAL
-  for candidate in ghostty kitty foot alacritty wezterm xterm; do
-    if found="$(command -v "$candidate" 2>/dev/null)" && [[ -n $found ]]; then
+  for candidate in "$PREFIX/bin/noctalia-terminal" foot kitty ghostty \
+    alacritty wezterm xterm; do
+    if [[ $candidate == /* ]]; then
+      if [[ -x $candidate ]]; then
+        TERMINAL="$candidate"
+        break
+      fi
+    elif found="$(command -v "$candidate" 2>/dev/null)" && [[ -n $found ]]; then
       TERMINAL="$found"
       break
     fi
@@ -596,6 +620,9 @@ if [[ ! -e $NOCTALIA_LOADER ]]; then
 fi
 
 clear_foreign_env
+
+# clear_foreign_env drops rootfs XKB state; restore the native values again.
+export_native_xkb
 
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -719,10 +746,11 @@ emit_noctalia_exec() {
 }
 
 install_launchers() {
-  local tmp bin_noctalia bin_mango bin_exec
+  local tmp bin_noctalia bin_mango bin_exec bin_terminal
   bin_noctalia="$PREFIX/bin/noctalia"
   bin_mango="$PREFIX/bin/mango-noctalia"
   bin_exec="$PREFIX/bin/noctalia-exec"
+  bin_terminal="$PREFIX/bin/noctalia-terminal"
 
   mkdir -p "$PREFIX/bin" "$TMPDIR"
   tmp="$(mktemp "$TMPDIR/install-noctalia.XXXXXX")"
@@ -749,11 +777,18 @@ install_launchers() {
   rm -f "$tmp"
   emit_noctalia_exec "$bin_exec"
 
+  local terminal_src="$self_dir/termux-compat/noctalia-terminal"
+  if [[ ! -f $terminal_src ]]; then
+    die "missing terminal wrapper: $terminal_src"
+  fi
+  install -m 0755 "$terminal_src" "$bin_terminal"
+
   cmp -s "$bin_noctalia" "$bin_mango" ||
     die "installed Noctalia launchers differ: $bin_noctalia $bin_mango"
   info "installed launcher: $bin_noctalia"
   info "installed launcher: $bin_mango"
   info "installed child wrapper: $bin_exec"
+  info "installed terminal wrapper: $bin_terminal"
 }
 
 ensure_noctalia_child_command() {

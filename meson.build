@@ -340,6 +340,7 @@ if get_option('termux')
   install_data(
     'termux-compat/mango-noctalia',
     'termux-compat/noctalia-exec',
+    'termux-compat/noctalia-terminal',
     'termux-compat/mango-firefox',
     'termux-compat/mango-gpu-run',
     'termux-compat/mango-integrate',
