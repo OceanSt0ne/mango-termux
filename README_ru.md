@@ -324,7 +324,7 @@ vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName'
 ## 11. Документация
 
 - [README.md](README.md) / [README_ru.md](README_ru.md) — актуальный двуязычный обзор.
-- [TERMUX_NOCTALIA.md](TERMUX_NOCTALIA.md) / [TERMUX_NOCTALIA_ru.md](TERMUX_NOCTALIA_ru.md) — подробные устаревшие заметки по proot/debug для Noctalia; каноническим считается нативный установщик.
+- [TERMUX_NOCTALIA.md](TERMUX_NOCTALIA.md) / [TERMUX_NOCTALIA_ru.md](TERMUX_NOCTALIA_ru.md) — подробное руководство по нативной настройке, работе, проверке и устранению неполадок Noctalia; установщик остаётся каноническим способом.
 - [docs/](docs/index.md) — документация MangoWM по конфигурации: привязки клавиш, параметры, визуальные эффекты, управление окнами, патчи.
 - Upstream-проект: [mangowm/mango](https://github.com/mangowm/mango)
 - Лицензия: см. [LICENSE](LICENSE).

@@ -324,7 +324,7 @@ Rebuild and restart with `./build-termux.sh && mango-termux --restart`.
 ## 11. Documentation
 
 - [README.md](README.md) / [README_ru.md](README_ru.md) — current bilingual overview.
-- [TERMUX_NOCTALIA.md](TERMUX_NOCTALIA.md) / [TERMUX_NOCTALIA_ru.md](TERMUX_NOCTALIA_ru.md) — detailed legacy PRoot/debug Noctalia notes; the native installer is canonical.
+- [TERMUX_NOCTALIA.md](TERMUX_NOCTALIA.md) / [TERMUX_NOCTALIA_ru.md](TERMUX_NOCTALIA_ru.md) — detailed native Noctalia setup, runtime, verification, and troubleshooting guide; the installer remains canonical.
 - [docs/](docs/index.md) — upstream MangoWM configuration documentation: bindings, configuration, visuals, window management, and patches.
 - Upstream project: [mangowm/mango](https://github.com/mangowm/mango)
 - License: see [LICENSE](LICENSE).
