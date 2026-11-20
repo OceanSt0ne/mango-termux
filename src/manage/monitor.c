@@ -30,6 +30,7 @@
 #include <wlr/backend/headless.h>
 #include <wlr/backend/session.h>
 #include <wlr/backend/wayland.h>
+#include <wlr/backend/x11.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
@@ -489,6 +490,14 @@ struct wlr_output_mode *get_nearest_output_mode(struct wlr_output *output,
 }
 
 void enable_adaptive_sync(Monitor *m, struct wlr_output_state *state) {
+	// The X11 backend keeps adaptive sync permanently enabled.
+	if (wlr_output_is_x11(m->wlr_output)) {
+		wlr_output_state_set_adaptive_sync_enabled(state, true);
+		m->is_vrr_enabling = true;
+		m->vrr_enable_failed = false;
+		return;
+	}
+
 	if (m->vrr_enable_failed) {
 		wlr_output_state_set_adaptive_sync_enabled(state, false);
 		return;
@@ -510,6 +519,11 @@ void enable_adaptive_sync(Monitor *m, struct wlr_output_state *state) {
 }
 
 void disable_adaptive_sync(Monitor *m, struct wlr_output_state *state) {
+	// The X11 backend rejects attempts to disable adaptive sync.
+	if (wlr_output_is_x11(m->wlr_output)) {
+		return;
+	}
+
 	wlr_output_state_set_adaptive_sync_enabled(state, false);
 	m->is_vrr_enabling = false;
 	m->vrr_enable_failed = false;
@@ -616,18 +630,24 @@ bool apply_rule_to_state(Monitor *m, const ConfigMonitorRule *rule,
 					"ICC profile ignored on output %s: HDR is enabled",
 					m->wlr_output->name);
 
+	bool is_x11 = wlr_output_is_x11(m->wlr_output);
 	if (rule->width > 0 && rule->height > 0 && rule->refresh > 0) {
 		struct wlr_output_mode *internal_mode = NULL;
-		if (!rule->custom)
+		if (!rule->custom && !is_x11)
 			internal_mode = get_nearest_output_mode(
 				m->wlr_output, rule->width, rule->height, rule->refresh);
 		if (internal_mode) {
 			wlr_output_state_set_mode(state, internal_mode);
 			mode_set = true;
-		} else if (rule->custom || wlr_output_is_headless(m->wlr_output)) {
+		} else if (rule->custom || is_x11 ||
+				   wlr_output_is_headless(m->wlr_output)) {
+			/* The X11 backend only supports custom modes, and rejects
+			 * nonzero refresh rates. */
+			int32_t refresh = is_x11
+								  ? 0
+								  : (int32_t)roundf(rule->refresh * 1000);
 			wlr_output_state_set_custom_mode(
-				state, rule->width, rule->height,
-				(int32_t)roundf(rule->refresh * 1000));
+				state, rule->width, rule->height, refresh);
 			mode_set = true;
 		}
 	}
@@ -767,9 +787,12 @@ void handle_new_output(struct wl_listener *listener, void *data) {
 		if (pending.mode_type == WLR_OUTPUT_STATE_MODE_FIXED) {
 			wlr_output_state_set_mode(&state, pending.mode);
 		} else if (pending.mode_type == WLR_OUTPUT_STATE_MODE_CUSTOM) {
+			int32_t refresh = pending.custom_mode.refresh;
+			// The X11 backend rejects custom modes with a nonzero refresh.
+			if (wlr_output_is_x11(wlr_output))
+				refresh = 0;
 			wlr_output_state_set_custom_mode(&state, pending.custom_mode.width,
-											 pending.custom_mode.height,
-											 pending.custom_mode.refresh);
+											 pending.custom_mode.height, refresh);
 		}
 	} else {
 		// Fallback: use the preferred mode.
@@ -788,6 +811,10 @@ void handle_new_output(struct wl_listener *listener, void *data) {
 	if (pending.committed & WLR_OUTPUT_STATE_ADAPTIVE_SYNC_ENABLED)
 		wlr_output_state_set_adaptive_sync_enabled(
 			&state, pending.adaptive_sync_enabled);
+	// The X11 backend permanently enables adaptive sync and rejects a state
+	// which tries to disable it. Keep it enabled for the initial commit.
+	if (wlr_output_is_x11(wlr_output))
+		wlr_output_state_set_adaptive_sync_enabled(&state, true);
 
 	// HDR settings
 	if (m->hdr_enable) {
