@@ -476,6 +476,13 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
 		break;
 	}
 
+	/* Clamp instead of the default GL_REPEAT: blur/texture samplers must not
+	 * wrap to the opposite edge when sampling outside [0,1]. Wrap-around on a
+	 * tiled Adreno buffer produces vertical colour trails around alpha/blur
+	 * regions. */
+	glTexParameteri(texture->target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(texture->target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
 	glUniform1i(shader->tex, 0);
 	glUniform1f(shader->alpha, alpha);
 
@@ -886,6 +893,9 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
 		abort();
 	}
 
+	glTexParameteri(texture->target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(texture->target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
 	glUniform1i(shader->tex, 0);
 	glUniform1f(shader->radius, blur_data->radius);
 
@@ -901,6 +911,11 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
 
 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
 	set_tex_matrix(shader->tex_proj, options->transform, &src_fbox);
+
+	/* Start from a transparent black buffer: the previous frame/tile-cache
+	 * contents must not leak into the unblurred parts of the effect buffer. */
+	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
 
 	render(&dst_box, options->clip, shader->pos_attrib);
 
@@ -958,6 +973,9 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
 		abort();
 	}
 
+	glTexParameteri(texture->target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(texture->target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
 	glUniform1i(shader.tex, 0);
 	glUniform1f(shader.noise, blur_data->noise);
 	glUniform1f(shader.brightness, blur_data->brightness);
@@ -966,6 +984,11 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
 
 	set_proj_matrix(shader.proj, pass->projection_matrix, &dst_box);
 	set_tex_matrix(shader.tex_proj, options->transform, &src_fbox);
+
+	/* Start from a transparent black buffer so previous-frame/tile-cache
+	 * contents cannot leak into the unblurred parts of the effect buffer. */
+	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
 
 	render(&dst_box, options->clip, shader.pos_attrib);
 
