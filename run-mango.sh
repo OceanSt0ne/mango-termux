@@ -19,6 +19,8 @@
 #   MANGO_TERMUX_GPU       compatibility: 1 = ahb, 0 = pixman, turnip/zink = turnip
 #   MANGO_XWAYLAND_GLAMOR  1 = opt into the DRI3/glamor Xwayland server; default
 #                          0 = stable no-glamor server with indirect GLX
+#   MANGO_X11_INPUT_PREFS  Termux:X11 input preferences applied at startup
+#                          (default: "touchMode:1 tapToMove:false", empty skips)
 #   MANGO_RESTART          1 = stop a running mango before starting a new one
 set -euo pipefail
 
@@ -553,6 +555,23 @@ x11_server_alive() {
     grep -qE "termux-x11 .*${display}([[:space:]]|$)"
 }
 
+# Termux:X11 delivers touch input as absolute coordinates unless trackpad mode
+# is used. Trackpad mode (1) produces true relative deltas for pointer-locked
+# applications, and disabling tap-to-move prevents a tap from teleporting the
+# pointer across the screen. Both settings are applied live and can be
+# overridden or disabled with MANGO_X11_INPUT_PREFS.
+apply_termux_x11_input_prefs() {
+  [[ "$backend" == "x11" ]] || return 0
+  command -v termux-x11-preference >/dev/null 2>&1 || return 0
+  local prefs="${MANGO_X11_INPUT_PREFS-touchMode:1 tapToMove:false}"
+  [[ -n "$prefs" ]] || return 0
+  # shellcheck disable=SC2086
+  if termux-x11-preference $prefs >/dev/null 2>&1; then
+    echo "Applied Termux:X11 input preferences: $prefs" >&2
+  fi
+  return 0
+}
+
 start_termux_x11() {
   if ! command -v termux-x11 >/dev/null 2>&1; then
     echo "termux-x11 not found. Install the X11 server:" >&2
@@ -621,6 +640,9 @@ if [[ "$backend" == "x11" ]]; then
     echo "Open the Termux:X11 app; server log: $x11_log" >&2
     exit 1
   fi
+
+  # Trackpad mode keeps 3D games from receiving absolute-position jumps.
+  apply_termux_x11_input_prefs
 else
   # Nested/headless modes keep the caller's DISPLAY/WAYLAND_DISPLAY.
   :

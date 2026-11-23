@@ -68,6 +68,10 @@ void pointer_end_grab_client(bool follow_pointer);
 void pointer_process_motion(uint32_t time, struct wlr_input_device *device,
 							double dx, double dy, double dx_unaccel,
 							double dy_unaccel);
+void pointer_process_motion_absolute(uint32_t time,
+									 struct wlr_input_device *device,
+									 double lx, double ly);
+void pointer_reset_absolute_tracking(void);
 void handle_cursor_motion(struct wl_listener *listener, void *data);
 void pointer_focus(Client *c, struct wlr_surface *surface, double sx, double sy,
 				   uint32_t time);

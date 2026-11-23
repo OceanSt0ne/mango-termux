@@ -21,7 +21,12 @@
 #include "mango/manage/tab.h"
 #include "mango/switcher/switcher.h"
 #include <scenefx/types/wlr_scene.h>
+#include <wlr/backend.h>
 #include <wlr/backend/libinput.h>
+#include <wlr/config.h>
+#include <wlr/backend/multi.h>
+#include <wlr/backend/wayland.h>
+#include <wlr/backend/x11.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
@@ -40,6 +45,72 @@
 #include <wlr/xcursor.h>
 
 static struct LastCursor last_cursor;
+
+/* Nested wlroots backends (X11/Wayland) and touchscreens only report absolute
+ * positions. Remember the previous sample so relative-pointer clients receive
+ * genuine device deltas instead of jumps caused by compositor cursor warps. */
+#define POINTER_ABS_RESET_MS 100
+static bool pointer_abs_valid = false;
+static double pointer_abs_x = 0, pointer_abs_y = 0;
+static uint32_t pointer_abs_time = 0;
+
+void pointer_reset_absolute_tracking(void) {
+	pointer_abs_valid = false;
+	pointer_abs_time = 0;
+}
+
+/* Returns true when a trustworthy delta from the previous absolute sample
+ * exists; resets after an idle gap so a new touch/tap never becomes a jump. */
+static bool pointer_absolute_track(uint32_t time, double lx, double ly,
+								   double *dx, double *dy) {
+	bool valid = pointer_abs_valid;
+	if (valid && time && pointer_abs_time && time > pointer_abs_time &&
+		time - pointer_abs_time > POINTER_ABS_RESET_MS) {
+		valid = false;
+	}
+	*dx = valid ? lx - pointer_abs_x : 0;
+	*dy = valid ? ly - pointer_abs_y : 0;
+	pointer_abs_x = lx;
+	pointer_abs_y = ly;
+	pointer_abs_time = time;
+	pointer_abs_valid = true;
+	return valid;
+}
+
+static void pointer_absolute_backend_probe(struct wlr_backend *backend,
+										   void *data) {
+	bool *absolute = data;
+	if (*absolute) {
+		return;
+	}
+#if WLR_HAS_X11_BACKEND
+	if (wlr_backend_is_x11(backend)) {
+		*absolute = true;
+		return;
+	}
+#endif
+	if (wlr_backend_is_wl(backend)) {
+		*absolute = true;
+	}
+}
+
+/* True when the compositor runs on a nested backend whose pointer stream is
+ * absolute-only (Termux:X11 X11 backend or nested Wayland backend). */
+static bool pointer_backend_is_absolute(void) {
+	struct wlr_backend *backend = server.backend;
+	bool absolute = false;
+
+	if (!backend) {
+		return false;
+	}
+	if (wlr_backend_is_multi(backend)) {
+		wlr_multi_for_each_backend(backend, pointer_absolute_backend_probe,
+								   &absolute);
+	} else {
+		pointer_absolute_backend_probe(backend, &absolute);
+	}
+	return absolute;
+}
 
 static double pointer_surface_scale(Client *c) {
 #ifdef XWAYLAND
@@ -139,7 +210,10 @@ static double pointer_hint_x = 0, pointer_hint_y = 0;
 
 static void
 pointer_follow_constraint_hint(struct wlr_pointer_constraint_v1 *constraint,
-							   Client *c) {
+							   Client *c, bool allow_warp) {
+	if (!allow_warp) {
+		return;
+	}
 	double lx, ly;
 	if (!pointer_constraint_hint_position(constraint, c, &lx, &ly)) {
 		return;
@@ -153,6 +227,7 @@ pointer_follow_constraint_hint(struct wlr_pointer_constraint_v1 *constraint,
 	wlr_cursor_warp(server.cursor, NULL, lx, ly);
 	wlr_seat_pointer_warp(constraint->seat, constraint->current.cursor_hint.x,
 						  constraint->current.cursor_hint.y);
+	pointer_reset_absolute_tracking();
 }
 
 static bool pointer_cursor_outside_client(Client *c) {
@@ -206,6 +281,7 @@ void pointer_check_confine_client(void) {
 		struct wlr_box box = pointer_client_warp_box(c);
 		wlr_cursor_warp(server.cursor, NULL, box.x + box.width / 2.0,
 						box.y + box.height / 2.0);
+		pointer_reset_absolute_tracking();
 	}
 	confine_pointer_last = c;
 }
@@ -244,6 +320,7 @@ pointer_warp_into_constraint(struct wlr_pointer_constraint_v1 *constraint,
 		pointer_cursor_outside_client(c)) {
 
 		wlr_cursor_warp(server.cursor, NULL, lx, ly);
+		pointer_reset_absolute_tracking();
 		return;
 	}
 
@@ -262,6 +339,7 @@ pointer_warp_into_constraint(struct wlr_pointer_constraint_v1 *constraint,
 
 	wlr_cursor_warp(server.cursor, NULL, box.x + c->bw + cx / scale,
 					box.y + c->bw + cy / scale);
+	pointer_reset_absolute_tracking();
 }
 
 static Client *
@@ -658,9 +736,17 @@ void handle_pointer_constraint_commit(struct wl_listener *listener,
 
 	pointer_constraint_sync_region(constraint);
 	toplevel_from_wlr_surface(constraint->surface, &c, NULL);
-	pointer_warp_into_constraint(constraint, c);
+	/* Nested X11/Wayland backends only deliver absolute positions. Following
+	 * the XWayland cursor hint here runs on every surface commit (GLFW calls
+	 * XWarpPointer each frame) and the warp is fed back as a huge relative
+	 * delta. XWayland maintains its own emulated pointer, so skip the host
+	 * warp; mouse motion is still confined/locked below. */
+	bool allow_warp = !pointer_backend_is_absolute();
+	if (allow_warp) {
+		pointer_warp_into_constraint(constraint, c);
+	}
 	if (constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED) {
-		pointer_follow_constraint_hint(constraint, c);
+		pointer_follow_constraint_hint(constraint, c, allow_warp);
 	}
 }
 
@@ -751,6 +837,7 @@ void pointer_warp_to_constraint_hint(void) {
 		wlr_seat_pointer_warp(server.active_constraint->seat,
 							  server.active_constraint->current.cursor_hint.x,
 							  server.active_constraint->current.cursor_hint.y);
+		pointer_reset_absolute_tracking();
 	}
 }
 
@@ -791,7 +878,7 @@ void handle_cursor_motion_absolute(struct wl_listener *listener, void *data) {
 	 * window from any edge, so we have to warp the mouse there. There is
 	 * also some hardware which emits these events. */
 	struct wlr_pointer_motion_absolute_event *event = data;
-	double lx, ly, dx, dy;
+	double lx, ly;
 
 	ipc_notify_device_event(&event->pointer->base);
 
@@ -805,10 +892,8 @@ void handle_cursor_motion_absolute(struct wl_listener *listener, void *data) {
 
 	wlr_cursor_absolute_to_layout_coords(server.cursor, &event->pointer->base,
 										 event->x, event->y, &lx, &ly);
-	dx = lx - server.cursor->x;
-	dy = ly - server.cursor->y;
-	pointer_process_motion(event->time_msec, &event->pointer->base, dx, dy, dx,
-						   dy);
+	pointer_process_motion_absolute(event->time_msec, &event->pointer->base,
+									lx, ly);
 }
 
 static int32_t client_resize_grab(Client *c) {
@@ -1175,9 +1260,12 @@ static Client *group_bar_target_at(double x, double y, Client *ignore) {
 	return target != ignore ? target : NULL;
 }
 
-void pointer_process_motion(uint32_t time, struct wlr_input_device *device,
-							double dx, double dy, double dx_unaccel,
-							double dy_unaccel) {
+static void pointer_process_motion_flags(uint32_t time,
+										 struct wlr_input_device *device,
+										 double dx, double dy,
+										 double dx_unaccel, double dy_unaccel,
+										 bool absolute, double rel_dx,
+										 double rel_dy, bool rel_valid) {
 	double sx = 0, sy = 0, sx_confined, sy_confined;
 	Client *c = NULL, *w = NULL;
 	Client *closet_drop_client = NULL;
@@ -1188,9 +1276,13 @@ void pointer_process_motion(uint32_t time, struct wlr_input_device *device,
 
 	/* time is 0 in internal calls meant to restore pointer focus. */
 	if (time) {
-		wlr_relative_pointer_manager_v1_send_relative_motion(
-			server.relative_pointer_manager, server.seat, (uint64_t)time * 1000,
-			dx, dy, dx_unaccel, dy_unaccel);
+		/* Absolute-only devices must not be reported as relative motion: the
+		 * delta is derived from compositor-warped cursor coordinates. */
+		if (!absolute) {
+			wlr_relative_pointer_manager_v1_send_relative_motion(
+				server.relative_pointer_manager, server.seat,
+				(uint64_t)time * 1000, dx, dy, dx_unaccel, dy_unaccel);
+		}
 
 		if (server.cursor_mode != CurResize && server.cursor_mode != CurMove) {
 			struct wlr_pointer_constraint_v1 *constraint = NULL;
@@ -1203,8 +1295,18 @@ void pointer_process_motion(uint32_t time, struct wlr_input_device *device,
 				 active->surface ==
 					 server.seat->pointer_state.focused_surface)) {
 				if (pointer_locked_constraint_applies(cc, active)) {
-					pointer_follow_constraint_hint(active, cc);
+					if (absolute && rel_valid) {
+						wlr_relative_pointer_manager_v1_send_relative_motion(
+							server.relative_pointer_manager, server.seat,
+							(uint64_t)time * 1000, rel_dx, rel_dy, rel_dx,
+							rel_dy);
+					}
+					pointer_follow_constraint_hint(active, cc, !absolute);
 					pointer_locked_applied = true;
+					/* Keep the idle timer alive without revealing the cursor
+					 * that the client hid for pointer-locked gameplay. */
+					wlr_idle_notifier_v1_notify_activity(server.idle_notifier,
+														 server.seat);
 					return;
 				}
 
@@ -1422,6 +1524,25 @@ void pointer_process_motion(uint32_t time, struct wlr_input_device *device,
 	}
 }
 
+void pointer_process_motion(uint32_t time, struct wlr_input_device *device,
+							double dx, double dy, double dx_unaccel,
+							double dy_unaccel) {
+	pointer_process_motion_flags(time, device, dx, dy, dx_unaccel, dy_unaccel,
+								 false, 0, 0, false);
+}
+
+void pointer_process_motion_absolute(uint32_t time,
+									 struct wlr_input_device *device,
+									 double lx, double ly) {
+	double dx = lx - server.cursor->x;
+	double dy = ly - server.cursor->y;
+	double rel_dx = 0, rel_dy = 0;
+	bool rel_valid = pointer_absolute_track(time, lx, ly, &rel_dx, &rel_dy);
+
+	pointer_process_motion_flags(time, device, dx, dy, dx, dy, true, rel_dx,
+								 rel_dy, rel_valid);
+}
+
 void handle_cursor_motion(struct wl_listener *listener, void *data) {
 	/* This event is forwarded by the cursor when a pointer emits a
 	 * _relative_ pointer motion event (i.e. a delta) */
@@ -1601,6 +1722,7 @@ void pointer_warp_to_client(const Client *c) {
 		wlr_cursor_warp_closest(server.cursor, NULL,
 								c->geom.x + c->geom.width / 2.0,
 								c->geom.y + c->geom.height / 2.0);
+		pointer_reset_absolute_tracking();
 		pointer_process_motion(0, NULL, 0, 0, 0, 0);
 	}
 }
@@ -1608,6 +1730,7 @@ void pointer_warp_to_client(const Client *c) {
 void pointer_warp_to_monitor(Monitor *m) {
 	wlr_cursor_warp_closest(server.cursor, NULL, m->w.x + m->w.width / 2.0,
 							m->w.y + m->w.height / 2.0);
+	pointer_reset_absolute_tracking();
 	wlr_cursor_set_xcursor(server.cursor, server.cursor_manager, "default");
 	pointer_cursor_activity();
 }

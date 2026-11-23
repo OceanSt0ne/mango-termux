@@ -110,9 +110,7 @@ void touch_emulate_move_absolute(struct wlr_touch *touch, double x, double y,
 	double lx, ly;
 	wlr_cursor_absolute_to_layout_coords(server.cursor, &touch->base, x, y, &lx,
 										 &ly);
-	double dx = lx - server.cursor->x;
-	double dy = ly - server.cursor->y;
-	pointer_process_motion(time, &touch->base, dx, dy, dx, dy);
+	pointer_process_motion_absolute(time, &touch->base, lx, ly);
 	wlr_seat_pointer_notify_frame(server.seat);
 }
 
@@ -212,6 +210,9 @@ void handle_cursor_touch_down(struct wl_listener *listener, void *data) {
 		// pointer; pointer_touch_id isolates multiple fingers.
 		simulating_pointer_from_touch = true;
 		pointer_touch_id = event->touch_id;
+		/* A new touch begins a new absolute input stream: never turn the
+		 * distance from the previous tap into a relative motion jump. */
+		pointer_reset_absolute_tracking();
 		touch_emulate_move_absolute(event->touch, event->x, event->y,
 									event->time_msec);
 		touch_emulate_button(BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED,
