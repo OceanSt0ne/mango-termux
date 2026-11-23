@@ -39,6 +39,7 @@
 #include <wlr/types/wlr_virtual_pointer_v1.h>
 #ifdef XWAYLAND
 #include <wlr/xwayland.h>
+#include <xcb/xcb.h>
 #endif
 #include <wlr/util/edges.h>
 #include <wlr/util/region.h>
@@ -50,9 +51,13 @@ static struct LastCursor last_cursor;
  * positions. Remember the previous sample so relative-pointer clients receive
  * genuine device deltas instead of jumps caused by compositor cursor warps. */
 #define POINTER_ABS_RESET_MS 100
+#define POINTER_WARP_ZONE 0.25
+#define POINTER_WARP_INTERVAL_MS 20
 static bool pointer_abs_valid = false;
 static double pointer_abs_x = 0, pointer_abs_y = 0;
 static uint32_t pointer_abs_time = 0;
+static bool pointer_host_warp_pending = false;
+static uint32_t pointer_host_warp_time = 0;
 
 void pointer_reset_absolute_tracking(void) {
 	pointer_abs_valid = false;
@@ -64,6 +69,13 @@ void pointer_reset_absolute_tracking(void) {
 static bool pointer_absolute_track(uint32_t time, double lx, double ly,
 								   double *dx, double *dy) {
 	bool valid = pointer_abs_valid;
+
+	/* The compositor just recentered the host X11 pointer. This sample is
+	 * the synthetic echo of that warp, not user motion: swallow it once. */
+	if (pointer_host_warp_pending) {
+		pointer_host_warp_pending = false;
+		valid = false;
+	}
 	if (valid && time && pointer_abs_time && time > pointer_abs_time &&
 		time - pointer_abs_time > POINTER_ABS_RESET_MS) {
 		valid = false;
@@ -111,6 +123,95 @@ static bool pointer_backend_is_absolute(void) {
 	}
 	return absolute;
 }
+
+#if WLR_HAS_X11_BACKEND
+static void pointer_x11_backend_probe(struct wlr_backend *backend, void *data) {
+	bool *found = data;
+	if (wlr_backend_is_x11(backend)) {
+		*found = true;
+	}
+}
+
+static bool pointer_backend_is_x11(void) {
+	struct wlr_backend *backend = server.backend;
+	bool found = false;
+
+	if (!backend) {
+		return false;
+	}
+	if (wlr_backend_is_multi(backend)) {
+		wlr_multi_for_each_backend(backend, pointer_x11_backend_probe, &found);
+	} else {
+		pointer_x11_backend_probe(backend, &found);
+	}
+	return found;
+}
+#else
+static bool pointer_backend_is_x11(void) {
+	return false;
+}
+#endif
+
+#ifdef XWAYLAND
+static xcb_connection_t *pointer_host_xcb = NULL;
+static bool pointer_host_xcb_tried = false;
+
+static xcb_connection_t *pointer_host_x11_connection(void) {
+	if (pointer_host_xcb_tried) {
+		return pointer_host_xcb;
+	}
+	pointer_host_xcb_tried = true;
+	if (server.host_x11_display[0] == '\0') {
+		return NULL;
+	}
+	pointer_host_xcb = xcb_connect(server.host_x11_display, NULL);
+	if (pointer_host_xcb && xcb_connection_has_error(pointer_host_xcb)) {
+		xcb_disconnect(pointer_host_xcb);
+		pointer_host_xcb = NULL;
+	}
+	return pointer_host_xcb;
+}
+
+/* Move the host X11 pointer to the middle of its screen so a locked game can
+ * keep rotating instead of stalling when the X sprite reaches an edge. */
+static bool pointer_recenter_host_cursor(void) {
+	xcb_connection_t *conn = pointer_host_x11_connection();
+	if (!conn) {
+		return false;
+	}
+
+	xcb_screen_iterator_t screens =
+		xcb_setup_roots_iterator(xcb_get_setup(conn));
+	if (!screens.rem) {
+		return false;
+	}
+	xcb_screen_t *screen = screens.data;
+	xcb_query_pointer_reply_t *reply = xcb_query_pointer_reply(
+		conn, xcb_query_pointer(conn, screen->root), NULL);
+	if (!reply) {
+		return false;
+	}
+
+	int16_t dx =
+		(int16_t)((int)screen->width_in_pixels / 2 - reply->root_x);
+	int16_t dy =
+		(int16_t)((int)screen->height_in_pixels / 2 - reply->root_y);
+	free(reply);
+	if (dx == 0 && dy == 0) {
+		return false;
+	}
+
+	xcb_warp_pointer(conn, XCB_NONE, XCB_NONE, 0, 0, 0, 0, dx, dy);
+	xcb_flush(conn);
+	pointer_host_warp_pending = true;
+	pointer_reset_absolute_tracking();
+	return true;
+}
+#else
+static bool pointer_recenter_host_cursor(void) {
+	return false;
+}
+#endif
 
 static double pointer_surface_scale(Client *c) {
 #ifdef XWAYLAND
@@ -204,6 +305,32 @@ static bool pointer_locked_constraint_applies(
 }
 
 static bool pointer_locked_applied = false;
+
+/* While a pointer constraint is locked, keep the host X11 pointer in the
+ * middle 50% of the screen. Without this the parent X server clamps the sprite
+ * at the screen border, absolute deltas become zero and camera rotation stops. */
+static void pointer_maybe_recenter_host_cursor(
+	struct wlr_pointer_motion_absolute_event *event) {
+	if (pointer_host_warp_pending || !pointer_locked_applied ||
+		!pointer_backend_is_x11() || !server.active_constraint ||
+		server.active_constraint->type != WLR_POINTER_CONSTRAINT_V1_LOCKED) {
+		return;
+	}
+	if (pointer_host_warp_time &&
+		event->time_msec - pointer_host_warp_time <
+			POINTER_WARP_INTERVAL_MS) {
+		return;
+	}
+	if (event->x >= POINTER_WARP_ZONE &&
+		event->x <= 1.0 - POINTER_WARP_ZONE &&
+		event->y >= POINTER_WARP_ZONE &&
+		event->y <= 1.0 - POINTER_WARP_ZONE) {
+		return;
+	}
+	if (pointer_recenter_host_cursor()) {
+		pointer_host_warp_time = event->time_msec;
+	}
+}
 
 static bool pointer_hint_applied = false;
 static double pointer_hint_x = 0, pointer_hint_y = 0;
@@ -786,6 +913,7 @@ void pointer_constrain_cursor(struct wlr_pointer_constraint_v1 *constraint) {
 
 	pointer_locked_applied = false;
 	pointer_hint_applied = false;
+	pointer_host_warp_pending = false;
 
 	Client *old_client = NULL, *new_client = NULL;
 	if (server.active_constraint) {
@@ -863,6 +991,7 @@ void handle_pointer_constraint_destroy(struct wl_listener *listener,
 		server.active_constraint = NULL;
 		pointer_locked_applied = false;
 		pointer_hint_applied = false;
+		pointer_host_warp_pending = false;
 	}
 
 	wl_list_remove(&pointer_constraint->destroy.link);
@@ -894,6 +1023,7 @@ void handle_cursor_motion_absolute(struct wl_listener *listener, void *data) {
 										 event->x, event->y, &lx, &ly);
 	pointer_process_motion_absolute(event->time_msec, &event->pointer->base,
 									lx, ly);
+	pointer_maybe_recenter_host_cursor(event);
 }
 
 static int32_t client_resize_grab(Client *c) {

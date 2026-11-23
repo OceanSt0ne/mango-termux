@@ -786,6 +786,14 @@ void setup(void) {
 		wlr_multi_backend_add(server.backend, server.headless_backend);
 	}
 
+	/* Keep the nested host display name: XWayland overwrites DISPLAY later,
+	 * but pointer-lock recentering must talk to the parent X server. */
+	const char *host_display = getenv("DISPLAY");
+	if (host_display && host_display[0] != '\0') {
+		snprintf(server.host_x11_display, sizeof(server.host_x11_display),
+				 "%s", host_display);
+	}
+
 	/* Initialize the scene graph used to lay out windows */
 	server.scene = wlr_scene_create();
 	server.root_bg =

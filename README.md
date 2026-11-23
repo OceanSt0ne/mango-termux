@@ -138,7 +138,7 @@ If the session does not appear, check the Termux:X11 app and the launcher log at
 | `MANGO_TERMUX_GPU` | auto | Compatibility alias: `1`/`ahb`, `0`/pixman, `turnip`/`zink` |
 | `MANGO_RESTART` | `0` | Stop a running Mango before starting |
 | `MANGO_XWAYLAND_GLAMOR` | `0` | `1` opts into the DRI3/glamor Xwayland server |
-| `MANGO_X11_INPUT_PREFS` | `touchMode:1 tapToMove:false` | Termux:X11 input preferences: trackpad mode and no tap-to-move; empty skips |
+| `MANGO_X11_INPUT_PREFS` | `touchMode:1` | Termux:X11 input preferences: trackpad mode keeps pointer input relative; empty skips |
 | `WLR_XWAYLAND` | auto | Override the Xwayland binary |
 | `XDG_RUNTIME_DIR` | `$PREFIX/tmp` | Wayland/X11 runtime directory |
 | `NOCTALIA_ROOTFS` | auto | Rootfs used by the native Noctalia installer |
@@ -314,7 +314,7 @@ Common issues:
 - Termux:X11 not reachable: open the app, run `mango-x11-check`, and read `$PREFIX/tmp/termux-x11.log`.
 - llvmpipe or no effects: install the KGSL stack, verify `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so`, then run `mango-termux --restart`.
 - Nested Xwayland dies or an X11 GL client aborts: keep `MANGO_XWAYLAND_GLAMOR=0` (default) and do not force glamor.
-- 3D games with a locked cursor (Minecraft/LWJGL/GLFW) spin or snap to ±90°: keep Termux:X11 in trackpad mode with `MANGO_X11_INPUT_PREFS=touchMode:1 tapToMove:false` (the default) and restart with `mango-termux --restart`. `touchMode` values 2 and 3 send absolute touch coordinates and break pointer lock. Inspect or override the live values with `termux-x11-preference list` and `termux-x11-preference touchMode:1 tapToMove:false`.
+- 3D games with a locked cursor (Minecraft/LWJGL/GLFW) spin, snap to ±90°, or stop rotating at the screen edge: keep Termux:X11 in trackpad mode with `MANGO_X11_INPUT_PREFS=touchMode:1` (the default) and restart with `mango-termux --restart`. While the cursor is locked, MangoWM recenters the host pointer automatically, so rotation is unlimited. `touchMode` values 2 and 3 send absolute touch coordinates and break pointer lock. Inspect or override the live values with `termux-x11-preference list` and `termux-x11-preference touchMode:1`.
 - An X11 app opens on the outer `:0`: make sure it inherits `DISPLAY=:1` from the Mango session, and rebuild with Xwayland enabled.
 - Firefox WebGL fails: run `mango-integrate`, then `termux-compat/install-firefox-webgl.sh`, and restart the session.
 - Noctalia has no rootfs: use `--bootstrap-rootfs` or `--rootfs`; validate with `--check`; `patchelf` is needed for the fallback binary.

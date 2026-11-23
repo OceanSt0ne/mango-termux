@@ -46,6 +46,8 @@ struct MangoServer {
 	struct wl_event_loop *event_loop;
 	struct wlr_backend *backend;
 	struct wlr_backend *headless_backend;
+	/* Host X11 display name captured before XWayland replaces DISPLAY. */
+	char host_x11_display[64];
 	const char *pending_headless_output_name;
 	struct wlr_scene *scene;
 	struct wlr_scene_tree *layers[NUM_LAYERS];

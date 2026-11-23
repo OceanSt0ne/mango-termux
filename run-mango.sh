@@ -20,7 +20,7 @@
 #   MANGO_XWAYLAND_GLAMOR  1 = opt into the DRI3/glamor Xwayland server; default
 #                          0 = stable no-glamor server with indirect GLX
 #   MANGO_X11_INPUT_PREFS  Termux:X11 input preferences applied at startup
-#                          (default: "touchMode:1 tapToMove:false", empty skips)
+#                          (default: "touchMode:1", empty skips)
 #   MANGO_RESTART          1 = stop a running mango before starting a new one
 set -euo pipefail
 
@@ -555,15 +555,18 @@ x11_server_alive() {
     grep -qE "termux-x11 .*${display}([[:space:]]|$)"
 }
 
-# Termux:X11 delivers touch input as absolute coordinates unless trackpad mode
-# is used. Trackpad mode (1) produces true relative deltas for pointer-locked
-# applications, and disabling tap-to-move prevents a tap from teleporting the
-# pointer across the screen. Both settings are applied live and can be
-# overridden or disabled with MANGO_X11_INPUT_PREFS.
+# Termux:X11 delivers touch input as absolute coordinates in its other modes,
+# which breaks pointer capture for locked 3D games. Trackpad mode (1) is the
+# only mode that keeps the pointer stream relative (true deltas), so it is the
+# default and is applied live; override or disable it with
+# MANGO_X11_INPUT_PREFS. Other input settings (tapToMove, pointerCapture) and
+# the extra-keys bar preferences (showAdditionalKbd, ekbar*) are intentionally
+# left untouched: tapToMove does not apply to trackpad mode, pointerCapture
+# only affects physical mice, and the extra-keys bar must keep its own config.
 apply_termux_x11_input_prefs() {
   [[ "$backend" == "x11" ]] || return 0
   command -v termux-x11-preference >/dev/null 2>&1 || return 0
-  local prefs="${MANGO_X11_INPUT_PREFS-touchMode:1 tapToMove:false}"
+  local prefs="${MANGO_X11_INPUT_PREFS-touchMode:1}"
   [[ -n "$prefs" ]] || return 0
   # shellcheck disable=SC2086
   if termux-x11-preference $prefs >/dev/null 2>&1; then

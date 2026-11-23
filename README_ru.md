@@ -138,7 +138,7 @@ MANGO_TERMUX_RENDERER=pixman mango-termux
 | `MANGO_TERMUX_GPU` | авто | Совместимый синоним: `1`/`ahb`, `0`/pixman, `turnip`/`zink` |
 | `MANGO_RESTART` | `0` | Остановить работающий Mango перед запуском |
 | `MANGO_XWAYLAND_GLAMOR` | `0` | `1` включает Xwayland с DRI3/glamor |
-| `MANGO_X11_INPUT_PREFS` | `touchMode:1 tapToMove:false` | Настройки ввода Termux:X11: режим тачпада без tap-to-move; пусто — пропустить |
+| `MANGO_X11_INPUT_PREFS` | `touchMode:1` | Настройки ввода Termux:X11: режим тачпада сохраняет относительный ввод; пусто — пропустить |
 | `WLR_XWAYLAND` | авто | Переопределить бинарник Xwayland |
 | `XDG_RUNTIME_DIR` | `$PREFIX/tmp` | Каталог сокетов Wayland/X11 |
 | `NOCTALIA_ROOTFS` | авто | Rootfs для установщика нативной Noctalia |
@@ -314,7 +314,7 @@ vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName'
 - Termux:X11 недоступен: откройте приложение, выполните `mango-x11-check`, прочитайте `$PREFIX/tmp/termux-x11.log`.
 - llvmpipe или отсутствие эффектов: установите стек KGSL, проверьте `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so` и перезапустите сессию через `mango-termux --restart`.
 - Вложенный Xwayland падает или X11-клиент с GL завершается: оставьте `MANGO_XWAYLAND_GLAMOR=0` (значение по умолчанию) и не включайте glamor принудительно.
-- 3D-игры с захватом курсора (Minecraft/LWJGL/GLFW) крутят камеру или упираются в ±90°: держите Termux:X11 в режиме тачпада с `MANGO_X11_INPUT_PREFS=touchMode:1 tapToMove:false` (значение по умолчанию) и перезапускайте через `mango-termux --restart`. Значения `touchMode` 2 и 3 передают абсолютные координаты касаний и ломают захват курсора. Посмотреть или переопределить живые значения: `termux-x11-preference list` и `termux-x11-preference touchMode:1 tapToMove:false`.
+- 3D-игры с захватом курсора (Minecraft/LWJGL/GLFW) крутят камеру, упираются в ±90° или перестают вращаться у края экрана: держите Termux:X11 в режиме тачпада с `MANGO_X11_INPUT_PREFS=touchMode:1` (значение по умолчанию) и перезапускайте через `mango-termux --restart`. Пока курсор захвачен, MangoWM автоматически возвращает внешний указатель к центру, поэтому вращение не ограничено. Значения `touchMode` 2 и 3 передают абсолютные координаты касаний и ломают захват курсора. Посмотреть или переопределить живые значения: `termux-x11-preference list` и `termux-x11-preference touchMode:1`.
 - X11-приложение открывается на внешнем `:0`: оно должно наследовать `DISPLAY=:1` от сессии Mango; пересоберите проект с включённым Xwayland.
 - Firefox WebGL: выполните `mango-integrate`, затем `termux-compat/install-firefox-webgl.sh` и перезапустите сессию.
 - Noctalia: при отсутствии rootfs используйте `--bootstrap-rootfs` или `--rootfs`; проверяйте через `--check`; для резервного бинарника нужен `patchelf`.
