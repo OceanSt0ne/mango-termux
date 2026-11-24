@@ -166,17 +166,23 @@ Mango searches for a config in this order:
 
 `config.conf` and `config.toml` are alternative formats; `config.conf` is the installed default on Termux. Modular configs are supported with `source=./file.conf`; common split files are `binds.conf`, `env.conf`, `input.conf`, `mics.conf`, `monitors.conf`, `windows.conf`, `animations.conf`, `layouts.conf`, and `tags.conf`.
 
-Reload the shipped default with `Super+R`. User configs may remap it. Enable visible effects with:
+Reload the shipped default with `Super+R`. User configs may remap it. The mobile 2K profile enables window blur and floating-window shadows, but keeps full-screen layer blur and layer shadows disabled:
 
 ```ini
 blur=1
-blur_layer=1
+blur_layer=0
+blur_optimized=1
+blur_params_num_passes = 1
+blur_params_radius = 4
 shadows = 1
-layer_shadows = 1
+layer_shadows = 0
+shadow_only_floating = 1
+shadows_size = 8
+shadows_blur = 10
 border_radius=12
 ```
 
-Effects require the GPU path (`mango-termux`), not software `pixman`.
+Effects require the GPU path (`mango-termux`), not software `pixman`. The build script writes this profile only when `$HOME/.config/mango/config.conf` does not exist yet; existing configs are never overwritten, so apply these values manually and reload with `Super+R` (or restart the session with `mango-termux --restart`) if window animations still stutter.
 
 Default keybindings from the shipped `assets/config.conf`:
 

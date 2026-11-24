@@ -166,17 +166,23 @@ mango-termux --restart -s foot
 
 `config.conf` и `config.toml` — альтернативные форматы; на Termux по умолчанию установлен `config.conf`. Модульные конфигурации подключаются через `source=./file.conf`; типичные файлы: `binds.conf`, `env.conf`, `input.conf`, `mics.conf`, `monitors.conf`, `windows.conf`, `animations.conf`, `layouts.conf`, `tags.conf`.
 
-Стандартная конфигурация перечитывается по `Super+R`; пользовательские конфигурации могут переназначить эту комбинацию. Включите видимые эффекты:
+Стандартная конфигурация перечитывается по `Super+R`; пользовательские конфигурации могут переназначить эту комбинацию. Мобильный профиль для 2K включает размытие окон и тени плавающих окон, но оставляет отключёнными полноэкранное размытие слоёв и тени слоёв:
 
 ```ini
 blur=1
-blur_layer=1
+blur_layer=0
+blur_optimized=1
+blur_params_num_passes = 1
+blur_params_radius = 4
 shadows = 1
-layer_shadows = 1
+layer_shadows = 0
+shadow_only_floating = 1
+shadows_size = 8
+shadows_blur = 10
 border_radius=12
 ```
 
-Эффекты требуют GPU-пути (`mango-termux`), а не программного `pixman`.
+Эффекты требуют GPU-пути (`mango-termux`), а не программного `pixman`. Скрипт сборки записывает этот профиль только если `$HOME/.config/mango/config.conf` ещё не существует; существующие конфигурации никогда не перезаписываются, поэтому примените эти значения вручную и перечитайте конфигурацию по `Super+R` (или перезапустите сессию через `mango-termux --restart`), если анимации окон всё ещё дёргаются.
 
 Горячие клавиши по умолчанию из `assets/config.conf`:
 

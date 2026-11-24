@@ -1245,6 +1245,12 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
 	pixman_region32_t clip;
 	pixman_region32_init_rect(&clip,
 			dst_box.x, dst_box.y, dst_box.width, dst_box.height);
+	// The scene may request a partial update of the cached blur. Only redraw
+	// the damaged part; the rest of the optimized buffer stays valid.
+	if (fx_options->tex_options.base.clip != NULL) {
+		pixman_region32_intersect(&clip, &clip,
+				fx_options->tex_options.base.clip);
+	}
 
 	// Render the blur into its own buffer
 	struct fx_render_blur_pass_options blur_options = *fx_options;

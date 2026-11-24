@@ -168,12 +168,16 @@ mkdir -p "$HOME/.config/mango"
 if [[ ! -f "$HOME/.config/mango/config.conf" ]]; then
   cp "$PREFIX/etc/mango/config.conf" "$HOME/.config/mango/config.conf"
   # The GPU path is the default on Termux, so enable the visible effects for
-  # new installs. Existing configs are never overwritten.
+  # new installs. Keep the 2K/mobile-friendly profile: window blur only (no
+  # full-screen layer blur), one blur pass and smaller floating-window
+  # shadows. Existing configs are never overwritten.
   sed -i \
     -e 's/^blur=0/blur=1/' \
-    -e 's/^blur_layer=0/blur_layer=1/' \
+    -e 's/^blur_params_num_passes = 2/blur_params_num_passes = 1/' \
+    -e 's/^blur_params_radius = 5/blur_params_radius = 4/' \
     -e 's/^shadows = 0/shadows = 1/' \
-    -e 's/^layer_shadows = 0/layer_shadows = 1/' \
+    -e 's/^shadows_size = 10/shadows_size = 8/' \
+    -e 's/^shadows_blur = 15/shadows_blur = 10/' \
     -e 's/^border_radius=6/border_radius=12/' \
     "$HOME/.config/mango/config.conf"
 fi

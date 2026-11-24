@@ -1,7 +1,8 @@
 diff --git a/include/render/fx_renderer/fx_renderer.h b/include/render/fx_renderer/fx_renderer.h
+index ba6cc4b..789d616 100644
 --- a/include/render/fx_renderer/fx_renderer.h
 +++ b/include/render/fx_renderer/fx_renderer.h
-@@ -106,6 +106,9 @@
+@@ -106,6 +106,9 @@ struct fx_texture *fx_get_texture(struct wlr_texture *wlr_texture);
  
  struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl);
  
@@ -12,6 +13,7 @@ diff --git a/include/render/fx_renderer/fx_renderer.h b/include/render/fx_render
  
  void push_fx_debug_(struct fx_renderer *renderer, const char *file, const char *func);
 diff --git a/include/scenefx/render/fx_renderer/fx_renderer.h b/include/scenefx/render/fx_renderer/fx_renderer.h
+index cbd312d..79ec98a 100644
 --- a/include/scenefx/render/fx_renderer/fx_renderer.h
 +++ b/include/scenefx/render/fx_renderer/fx_renderer.h
 @@ -1,6 +1,8 @@
@@ -23,7 +25,7 @@ diff --git a/include/scenefx/render/fx_renderer/fx_renderer.h b/include/scenefx/
  #include <GLES2/gl2.h>
  #include <GLES2/gl2ext.h>
  #include <wlr/backend.h>
-@@ -12,6 +14,33 @@
+@@ -12,6 +14,33 @@ struct fx_renderer;
  struct wlr_renderer *fx_renderer_create_with_drm_fd(int drm_fd);
  struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend);
  
@@ -57,10 +59,39 @@ diff --git a/include/scenefx/render/fx_renderer/fx_renderer.h b/include/scenefx/
  struct fx_renderer *fx_get_renderer(struct wlr_renderer *wlr_renderer);
  
  bool fx_renderer_check_ext(struct wlr_renderer *renderer, const char *ext);
+diff --git a/include/scenefx/types/wlr_scene.h b/include/scenefx/types/wlr_scene.h
+index ac1bc49..63c1e11 100644
+--- a/include/scenefx/types/wlr_scene.h
++++ b/include/scenefx/types/wlr_scene.h
+@@ -190,6 +190,12 @@ struct wlr_scene_optimized_blur {
+ 	int width, height;
+ 
+ 	bool dirty;
++	/* The cached buffer must be refreshed as a whole (new buffer, resize,
++	 * blur parameter change or background layer commit). */
++	bool full_redraw;
++	/* The cached buffer contains at least one full render and can be
++	 * refreshed by damage-sized partial updates. */
++	bool has_content;
+ };
+ 
+ struct wlr_scene_outputs_update_event {
+@@ -708,6 +714,10 @@ void wlr_scene_optimized_blur_set_size(struct wlr_scene_optimized_blur *blur_nod
+  * Tells the renderer to re-render the optimized blur.
+  * This is very expensive so should only be called when needed.
+  *
++ * Once the cache has been fully rendered, only the damaged region is
++ * refreshed. Resizing the node or changing blur parameters forces a full
++ * re-render.
++ *
+  * An example use would be to call this when a "static" node changes, like a
+  * wallpaper.
+  */
 diff --git a/render/egl.c b/render/egl.c
+index 85d5f6f..63d272d 100644
 --- a/render/egl.c
 +++ b/render/egl.c
-@@ -205,8 +205,10 @@
+@@ -205,8 +205,10 @@ static struct wlr_egl *egl_create(void) {
  	wlr_log(WLR_INFO, "Supported EGL client extensions: %s", client_exts_str);
  
  	if (!check_egl_ext(client_exts_str, "EGL_EXT_platform_base")) {
@@ -74,9 +105,10 @@ diff --git a/render/egl.c b/render/egl.c
  
  	struct wlr_egl *egl = calloc(1, sizeof(*egl));
 diff --git a/render/fx_renderer/fx_framebuffer.c b/render/fx_renderer/fx_framebuffer.c
+index d514b34..888a571 100644
 --- a/render/fx_renderer/fx_framebuffer.c
 +++ b/render/fx_renderer/fx_framebuffer.c
-@@ -134,15 +134,21 @@
+@@ -134,15 +134,21 @@ struct fx_framebuffer *fx_framebuffer_get_or_create(struct fx_renderer *renderer
  	buffer->buffer = wlr_buffer;
  	buffer->renderer = renderer;
  
@@ -105,9 +137,10 @@ diff --git a/render/fx_renderer/fx_framebuffer.c b/render/fx_renderer/fx_framebu
  
  	wlr_addon_init(&buffer->addon, &wlr_buffer->addons, renderer,
 diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
+index 39b6226..b2f0ebd 100644
 --- a/render/fx_renderer/fx_pass.c
 +++ b/render/fx_renderer/fx_pass.c
-@@ -78,9 +78,9 @@
+@@ -78,9 +78,9 @@ bool fx_render_pass_init_offscreen_buffers(struct wlr_render_pass *render_pass,
  			&pass->fx_offscreen_buffers->effects_buffer, &failed);
  	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, true,
  			&pass->fx_offscreen_buffers->effects_buffer_swapped, &failed);
@@ -119,7 +152,7 @@ diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
  			&pass->fx_offscreen_buffers->optimized_no_blur_buffer, &failed);
  
  	// Bind back to the default buffer
-@@ -145,6 +145,10 @@
+@@ -145,6 +145,10 @@ static bool render_pass_submit(struct wlr_render_pass *wlr_pass) {
  		if (!ok) {
  			goto out;
  		}
@@ -130,10 +163,82 @@ diff --git a/render/fx_renderer/fx_pass.c b/render/fx_renderer/fx_pass.c
  	} else {
  		glFlush();
  	}
+@@ -472,6 +476,13 @@ void fx_render_pass_add_texture(struct fx_gles_render_pass *pass,
+ 		break;
+ 	}
+ 
++	/* Clamp instead of the default GL_REPEAT: blur/texture samplers must not
++	 * wrap to the opposite edge when sampling outside [0,1]. Wrap-around on a
++	 * tiled Adreno buffer produces vertical colour trails around alpha/blur
++	 * regions. */
++	glTexParameteri(texture->target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++	glTexParameteri(texture->target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++
+ 	glUniform1i(shader->tex, 0);
+ 	glUniform1f(shader->alpha, alpha);
+ 
+@@ -882,6 +893,9 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+ 		abort();
+ 	}
+ 
++	glTexParameteri(texture->target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++	glTexParameteri(texture->target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++
+ 	glUniform1i(shader->tex, 0);
+ 	glUniform1f(shader->radius, blur_data->radius);
+ 
+@@ -898,6 +912,11 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
+ 	set_proj_matrix(shader->proj, pass->projection_matrix, &dst_box);
+ 	set_tex_matrix(shader->tex_proj, options->transform, &src_fbox);
+ 
++	/* Start from a transparent black buffer: the previous frame/tile-cache
++	 * contents must not leak into the unblurred parts of the effect buffer. */
++	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
++	glClear(GL_COLOR_BUFFER_BIT);
++
+ 	render(&dst_box, options->clip, shader->pos_attrib);
+ 
+ 	glBindTexture(texture->target, 0);
+@@ -954,6 +973,9 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
+ 		abort();
+ 	}
+ 
++	glTexParameteri(texture->target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++	glTexParameteri(texture->target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++
+ 	glUniform1i(shader.tex, 0);
+ 	glUniform1f(shader.noise, blur_data->noise);
+ 	glUniform1f(shader.brightness, blur_data->brightness);
+@@ -963,6 +985,11 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
+ 	set_proj_matrix(shader.proj, pass->projection_matrix, &dst_box);
+ 	set_tex_matrix(shader.tex_proj, options->transform, &src_fbox);
+ 
++	/* Start from a transparent black buffer so previous-frame/tile-cache
++	 * contents cannot leak into the unblurred parts of the effect buffer. */
++	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
++	glClear(GL_COLOR_BUFFER_BIT);
++
+ 	render(&dst_box, options->clip, shader.pos_attrib);
+ 
+ 	glBindTexture(texture->target, 0);
+@@ -1218,6 +1245,12 @@ bool fx_render_pass_add_optimized_blur(struct fx_gles_render_pass *pass,
+ 	pixman_region32_t clip;
+ 	pixman_region32_init_rect(&clip,
+ 			dst_box.x, dst_box.y, dst_box.width, dst_box.height);
++	// The scene may request a partial update of the cached blur. Only redraw
++	// the damaged part; the rest of the optimized buffer stays valid.
++	if (fx_options->tex_options.base.clip != NULL) {
++		pixman_region32_intersect(&clip, &clip,
++				fx_options->tex_options.base.clip);
++	}
+ 
+ 	// Render the blur into its own buffer
+ 	struct fx_render_blur_pass_options blur_options = *fx_options;
 diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
+index 8d0a7b2..ad422a6 100644
 --- a/render/fx_renderer/fx_renderer.c
 +++ b/render/fx_renderer/fx_renderer.c
-@@ -67,6 +67,10 @@
+@@ -67,6 +67,10 @@ static const struct wlr_drm_format_set *fx_get_texture_formats(
  static const struct wlr_drm_format_set *fx_get_render_formats(
  		struct wlr_renderer *wlr_renderer) {
  	struct fx_renderer *renderer = fx_get_renderer(wlr_renderer);
@@ -144,7 +249,7 @@ diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
  	return wlr_egl_get_dmabuf_render_formats(renderer->egl);
  }
  
-@@ -354,6 +358,33 @@
+@@ -354,6 +358,33 @@ struct wlr_renderer *fx_renderer_create(struct wlr_backend *backend) {
  	return renderer_autocreate(backend, -1);
  }
  
@@ -178,7 +283,7 @@ diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
  static bool link_shaders(struct fx_renderer *renderer) {
  	// quad fragment shader
  	if (!link_quad_program(&renderer->shaders.quad, false)) {
-@@ -459,7 +490,13 @@
+@@ -459,7 +490,13 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
  	if (renderer == NULL) {
  		return NULL;
  	}
@@ -193,7 +298,7 @@ diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
  	renderer->wlr_renderer.features.output_color_transform = false;
  
  	wl_list_init(&renderer->buffers);
-@@ -476,7 +513,8 @@
+@@ -476,7 +513,8 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
  	wlr_log(WLR_INFO, "GL renderer: %s", glGetString(GL_RENDERER));
  	wlr_log(WLR_INFO, "Supported FX extensions: %s", exts_str);
  
@@ -203,7 +308,7 @@ diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
  		wlr_log(WLR_ERROR, "EGL_EXT_image_dma_buf_import not supported");
  		free(renderer);
  		return NULL;
-@@ -487,9 +525,14 @@
+@@ -487,9 +525,14 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
  		return NULL;
  	}
  	if (!check_gl_ext(exts_str, "GL_EXT_unpack_subimage")) {
@@ -222,9 +327,10 @@ diff --git a/render/fx_renderer/fx_renderer.c b/render/fx_renderer/fx_renderer.c
  
  	renderer->exts.EXT_read_format_bgra =
 diff --git a/render/fx_renderer/fx_texture.c b/render/fx_renderer/fx_texture.c
+index f69f735..b67d32e 100644
 --- a/render/fx_renderer/fx_texture.c
 +++ b/render/fx_renderer/fx_texture.c
-@@ -411,7 +411,10 @@
+@@ -411,7 +411,10 @@ struct wlr_texture *fx_texture_from_buffer(struct wlr_renderer *wlr_renderer,
  	uint32_t format;
  	size_t stride;
  	struct wlr_dmabuf_attributes dmabuf;
@@ -237,6 +343,7 @@ diff --git a/render/fx_renderer/fx_texture.c b/render/fx_renderer/fx_texture.c
  	} else if (wlr_buffer_begin_data_ptr_access(buffer,
  			WLR_BUFFER_DATA_PTR_ACCESS_READ, &data, &format, &stride)) {
 diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
+index 9a9fcc0..b3af37c 100644
 --- a/types/scene/wlr_scene.c
 +++ b/types/scene/wlr_scene.c
 @@ -20,6 +20,7 @@
@@ -247,21 +354,33 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  #include "scenefx/render/pass.h"
  #include "scenefx/types/fx/blur_data.h"
  #include "scenefx/types/fx/clipped_region.h"
-@@ -1082,6 +1083,21 @@
+@@ -1072,6 +1073,8 @@ void wlr_scene_shadow_set_clipped_region(struct wlr_scene_shadow *shadow,
+ static void mark_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
+ 	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+ 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
++		// Blur parameters changed: the whole cached image is stale.
++		scene_blur->full_redraw = true;
+ 		wlr_scene_optimized_blur_mark_dirty(scene_blur);
+ 	} else if (node->type == WLR_SCENE_NODE_TREE) {
+ 		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
+@@ -1082,6 +1085,24 @@ static void mark_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
  	}
  }
  
-+static void set_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
++static void mark_uninitialized_optimized_blur_nodes_dirty(
++		struct wlr_scene_node *node) {
 +	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
-+		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
-+		if (node->enabled) {
++		struct wlr_scene_optimized_blur *scene_blur =
++			wlr_scene_optimized_blur_from_node(node);
++		if (node->enabled && !scene_blur->has_content) {
 +			scene_blur->dirty = true;
++			scene_blur->full_redraw = true;
 +		}
 +	} else if (node->type == WLR_SCENE_NODE_TREE) {
 +		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
 +		struct wlr_scene_node *child;
 +		wl_list_for_each(child, &scene_tree->children, link) {
-+			set_all_optimized_blur_nodes_dirty(child);
++			mark_uninitialized_optimized_blur_nodes_dirty(child);
 +		}
 +	}
 +}
@@ -269,7 +388,25 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  struct wlr_scene_blur *wlr_scene_blur_create(struct wlr_scene_tree *parent,
  	   int width, int height) {
  	struct wlr_scene_blur *blur = calloc(1, sizeof(*blur));
-@@ -1956,7 +1972,9 @@
+@@ -1294,6 +1315,8 @@ struct wlr_scene_optimized_blur *wlr_scene_optimized_blur_create(
+ 	scene_blur->width = width;
+ 	scene_blur->height = height;
+ 	scene_blur->dirty = false;
++	scene_blur->full_redraw = true;
++	scene_blur->has_content = false;
+ 
+ 	scene_node_update(&scene_blur->node, NULL);
+ 
+@@ -1309,6 +1332,8 @@ void wlr_scene_optimized_blur_set_size(struct wlr_scene_optimized_blur *blur_nod
+ 
+ 	blur_node->width = width;
+ 	blur_node->height = height;
++	// The cached image no longer matches the node geometry.
++	blur_node->full_redraw = true;
+ 
+ 	wlr_scene_optimized_blur_mark_dirty(blur_node);
+ }
+@@ -1956,7 +1981,9 @@ static float get_luminance_multiplier(const struct wlr_color_luminances *src_lum
  
  static void scene_entry_render(struct render_list_entry *entry, const struct render_data *data) {
  	struct wlr_scene_node *node = entry->node;
@@ -280,7 +417,7 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  
  	pixman_region32_t render_region;
  	pixman_region32_init(&render_region);
-@@ -2026,8 +2044,10 @@
+@@ -2026,8 +2053,10 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
  			},
  		};
  
@@ -293,7 +430,7 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  			struct fx_render_rounded_rect_options rounded_rect_options = {
  				.base = rect_options.base,
  				.corners = fx_corner_radii_scale(rect_corners, data->scale),
-@@ -2109,8 +2129,12 @@
+@@ -2109,8 +2138,12 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
  			.clipped_region = {0},
  		};
  
@@ -308,7 +445,7 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  
  		struct wlr_scene_output_sample_event sample_event = {
  			.output = data->output,
-@@ -2129,6 +2153,9 @@
+@@ -2129,6 +2162,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
  		}
  		break;
  	case WLR_SCENE_NODE_SHADOW:;
@@ -318,7 +455,7 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  		struct wlr_scene_shadow *scene_shadow = wlr_scene_shadow_from_node(node);
  
  		struct wlr_box shadow_clipped_region_box = scene_shadow->clipped_region.area;
-@@ -2160,6 +2187,9 @@
+@@ -2160,37 +2196,63 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
  		fx_render_pass_add_box_shadow(fx_pass, &shadow_options);
  		break;
  	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
@@ -328,7 +465,72 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
  		// Re-render the optimized blur buffer when needed. Retry rendering
  		// until there's a visible blur_node.
-@@ -2191,6 +2221,9 @@
+ 		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)
+ 				&& scene_blur->dirty) {
+-			const float opacity = 1.0f;
+-			enum wl_output_transform transform =
+-				wlr_output_transform_invert(data->transform);
+-			transform = wlr_output_transform_compose(transform, data->transform);
+-			struct fx_render_blur_pass_options blur_options = {
+-				.tex_options = {
+-					.base = {
+-						.transform = transform,
+-						.alpha = &opacity,
+-						.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+-						.dst_box = dst_box,
++			const bool full_redraw =
++				scene_blur->full_redraw || !scene_blur->has_content;
++			pixman_region32_t blur_clip;
++			pixman_region32_init_rect(&blur_clip,
++					dst_box.x, dst_box.y, dst_box.width, dst_box.height);
++			if (!full_redraw) {
++				// Outside the damaged region the cached background blur is
++				// still valid. Refreshing only the damage avoids a full 2K
++				// re-blur on every animation frame.
++				pixman_region32_intersect(&blur_clip, &blur_clip,
++						&data->damage);
++			}
++			if (pixman_region32_not_empty(&blur_clip)) {
++				const float opacity = 1.0f;
++				enum wl_output_transform transform =
++					wlr_output_transform_invert(data->transform);
++				transform = wlr_output_transform_compose(transform, data->transform);
++				struct fx_render_blur_pass_options blur_options = {
++					.tex_options = {
++						.base = {
++							.transform = transform,
++							.alpha = &opacity,
++							.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
++							.dst_box = dst_box,
++							.clip = &blur_clip,
++						},
++						.clip_box = &dst_box,
++						.discard_transparent = false,
++						.clipped_region = {0}
+ 					},
+-					.clip_box = &dst_box,
+-					.discard_transparent = false,
+-					.clipped_region = {0}
+-				},
+-				.blur_data = &scene->blur_data,
+-				.blur_strength = 1.0f,
+-			};
+-			bool result = fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
+-			if (result) {
+-				scene_blur->dirty = false;
++					.blur_data = &scene->blur_data,
++					.blur_strength = 1.0f,
++				};
++				bool result = fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
++				if (result) {
++					scene_blur->dirty = false;
++					if (full_redraw) {
++						scene_blur->full_redraw = false;
++						scene_blur->has_content = true;
++					}
++				}
+ 			}
++			pixman_region32_fini(&blur_clip);
  		}
  		break;
  	case WLR_SCENE_NODE_BLUR:;
@@ -338,7 +540,7 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  		struct wlr_scene_blur *blur = wlr_scene_blur_from_node(node);
  
  		struct wlr_texture *tex = NULL;
-@@ -2863,13 +2896,15 @@
+@@ -2863,13 +2925,23 @@ bool wlr_scene_output_needs_frame(struct wlr_scene_output *scene_output) {
  }
  
  static bool should_blur_node_extend_damage(struct wlr_scene_node *node,
@@ -349,13 +551,22 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  	case WLR_SCENE_NODE_BLUR:;
  		struct wlr_scene_blur *blur_node = wlr_scene_blur_from_node(node);
  		// No artifact prevention needed when the whole blur is already
- 		// rendered
+-		// rendered
++		// rendered.
++		//
++		// Only make sure that an optimized blur buffer that was never fully
++		// rendered gets one. Do not refresh initialized buffers here: this
++		// function runs for every blur node whenever the output has damage,
++		// which used to force a full-output 2K wallpaper blur re-render on
++		// each animation frame. Initialized buffers are invalidated when the
++		// background layer commits (see layer_flush_blur_background) and when
++		// their size or blur parameters change.
  		if (blur_node->should_only_blur_bottom_layer && blur_node->strength == 1.0) {
-+			set_all_optimized_blur_nodes_dirty(&scene->tree.node);
++			mark_uninitialized_optimized_blur_nodes_dirty(&scene->tree.node);
  			fx_pass->has_blur = true;
  			return false;
  		}
-@@ -3290,9 +3325,12 @@
+@@ -3290,9 +3362,12 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
  	wlr_damage_ring_rotate_buffer(&scene_output->damage_ring, buffer,
  		&render_data.damage);
  
@@ -370,7 +581,7 @@ diff --git a/types/scene/wlr_scene.c b/types/scene/wlr_scene.c
  			&& pixman_region32_not_empty(&render_data.damage)) {
  		// Blur artifact prevention
  		// Note: Supports individual blur node blur_data
-@@ -3323,7 +3361,8 @@
+@@ -3323,7 +3398,8 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
  			struct render_list_entry *entry = &list_data[i];
  			struct wlr_scene_node *node = entry->node;
  			struct blur_data blur_data = scene_output->scene->blur_data;

@@ -190,6 +190,12 @@ struct wlr_scene_optimized_blur {
 	int width, height;
 
 	bool dirty;
+	/* The cached buffer must be refreshed as a whole (new buffer, resize,
+	 * blur parameter change or background layer commit). */
+	bool full_redraw;
+	/* The cached buffer contains at least one full render and can be
+	 * refreshed by damage-sized partial updates. */
+	bool has_content;
 };
 
 struct wlr_scene_outputs_update_event {
@@ -707,6 +713,10 @@ void wlr_scene_optimized_blur_set_size(struct wlr_scene_optimized_blur *blur_nod
 /**
  * Tells the renderer to re-render the optimized blur.
  * This is very expensive so should only be called when needed.
+ *
+ * Once the cache has been fully rendered, only the damaged region is
+ * refreshed. Resizing the node or changing blur parameters forces a full
+ * re-render.
  *
  * An example use would be to call this when a "static" node changes, like a
  * wallpaper.

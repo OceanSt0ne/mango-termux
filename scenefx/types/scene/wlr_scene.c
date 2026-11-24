@@ -1073,6 +1073,8 @@ void wlr_scene_shadow_set_clipped_region(struct wlr_scene_shadow *shadow,
 static void mark_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
 	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
 		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
+		// Blur parameters changed: the whole cached image is stale.
+		scene_blur->full_redraw = true;
 		wlr_scene_optimized_blur_mark_dirty(scene_blur);
 	} else if (node->type == WLR_SCENE_NODE_TREE) {
 		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
@@ -1083,17 +1085,20 @@ static void mark_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
 	}
 }
 
-static void set_all_optimized_blur_nodes_dirty(struct wlr_scene_node *node) {
+static void mark_uninitialized_optimized_blur_nodes_dirty(
+		struct wlr_scene_node *node) {
 	if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
-		struct wlr_scene_optimized_blur *scene_blur = wlr_scene_optimized_blur_from_node(node);
-		if (node->enabled) {
+		struct wlr_scene_optimized_blur *scene_blur =
+			wlr_scene_optimized_blur_from_node(node);
+		if (node->enabled && !scene_blur->has_content) {
 			scene_blur->dirty = true;
+			scene_blur->full_redraw = true;
 		}
 	} else if (node->type == WLR_SCENE_NODE_TREE) {
 		struct wlr_scene_tree *scene_tree = wlr_scene_tree_from_node(node);
 		struct wlr_scene_node *child;
 		wl_list_for_each(child, &scene_tree->children, link) {
-			set_all_optimized_blur_nodes_dirty(child);
+			mark_uninitialized_optimized_blur_nodes_dirty(child);
 		}
 	}
 }
@@ -1310,6 +1315,8 @@ struct wlr_scene_optimized_blur *wlr_scene_optimized_blur_create(
 	scene_blur->width = width;
 	scene_blur->height = height;
 	scene_blur->dirty = false;
+	scene_blur->full_redraw = true;
+	scene_blur->has_content = false;
 
 	scene_node_update(&scene_blur->node, NULL);
 
@@ -1325,6 +1332,8 @@ void wlr_scene_optimized_blur_set_size(struct wlr_scene_optimized_blur *blur_nod
 
 	blur_node->width = width;
 	blur_node->height = height;
+	// The cached image no longer matches the node geometry.
+	blur_node->full_redraw = true;
 
 	wlr_scene_optimized_blur_mark_dirty(blur_node);
 }
@@ -2195,29 +2204,49 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		// until there's a visible blur_node.
 		if (fx_pass->has_blur && is_scene_blur_enabled(&scene->blur_data)
 				&& scene_blur->dirty) {
-			const float opacity = 1.0f;
-			enum wl_output_transform transform =
-				wlr_output_transform_invert(data->transform);
-			transform = wlr_output_transform_compose(transform, data->transform);
-			struct fx_render_blur_pass_options blur_options = {
-				.tex_options = {
-					.base = {
-						.transform = transform,
-						.alpha = &opacity,
-						.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
-						.dst_box = dst_box,
-					},
-					.clip_box = &dst_box,
-					.discard_transparent = false,
-					.clipped_region = {0}
-				},
-				.blur_data = &scene->blur_data,
-				.blur_strength = 1.0f,
-			};
-			bool result = fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
-			if (result) {
-				scene_blur->dirty = false;
+			const bool full_redraw =
+				scene_blur->full_redraw || !scene_blur->has_content;
+			pixman_region32_t blur_clip;
+			pixman_region32_init_rect(&blur_clip,
+					dst_box.x, dst_box.y, dst_box.width, dst_box.height);
+			if (!full_redraw) {
+				// Outside the damaged region the cached background blur is
+				// still valid. Refreshing only the damage avoids a full 2K
+				// re-blur on every animation frame.
+				pixman_region32_intersect(&blur_clip, &blur_clip,
+						&data->damage);
 			}
+			if (pixman_region32_not_empty(&blur_clip)) {
+				const float opacity = 1.0f;
+				enum wl_output_transform transform =
+					wlr_output_transform_invert(data->transform);
+				transform = wlr_output_transform_compose(transform, data->transform);
+				struct fx_render_blur_pass_options blur_options = {
+					.tex_options = {
+						.base = {
+							.transform = transform,
+							.alpha = &opacity,
+							.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+							.dst_box = dst_box,
+							.clip = &blur_clip,
+						},
+						.clip_box = &dst_box,
+						.discard_transparent = false,
+						.clipped_region = {0}
+					},
+					.blur_data = &scene->blur_data,
+					.blur_strength = 1.0f,
+				};
+				bool result = fx_render_pass_add_optimized_blur(fx_pass, &blur_options);
+				if (result) {
+					scene_blur->dirty = false;
+					if (full_redraw) {
+						scene_blur->full_redraw = false;
+						scene_blur->has_content = true;
+					}
+				}
+			}
+			pixman_region32_fini(&blur_clip);
 		}
 		break;
 	case WLR_SCENE_NODE_BLUR:;
@@ -2902,9 +2931,17 @@ static bool should_blur_node_extend_damage(struct wlr_scene_node *node,
 	case WLR_SCENE_NODE_BLUR:;
 		struct wlr_scene_blur *blur_node = wlr_scene_blur_from_node(node);
 		// No artifact prevention needed when the whole blur is already
-		// rendered
+		// rendered.
+		//
+		// Only make sure that an optimized blur buffer that was never fully
+		// rendered gets one. Do not refresh initialized buffers here: this
+		// function runs for every blur node whenever the output has damage,
+		// which used to force a full-output 2K wallpaper blur re-render on
+		// each animation frame. Initialized buffers are invalidated when the
+		// background layer commits (see layer_flush_blur_background) and when
+		// their size or blur parameters change.
 		if (blur_node->should_only_blur_bottom_layer && blur_node->strength == 1.0) {
-			set_all_optimized_blur_nodes_dirty(&scene->tree.node);
+			mark_uninitialized_optimized_blur_nodes_dirty(&scene->tree.node);
 			fx_pass->has_blur = true;
 			return false;
 		}
