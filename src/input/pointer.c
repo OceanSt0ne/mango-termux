@@ -20,6 +20,7 @@
 #include "mango/manage/monitor.h"
 #include "mango/manage/tab.h"
 #include "mango/switcher/switcher.h"
+#include <math.h>
 #include <scenefx/types/wlr_scene.h>
 #include <wlr/backend.h>
 #include <wlr/backend/libinput.h>
@@ -51,13 +52,19 @@ static struct LastCursor last_cursor;
  * positions. Remember the previous sample so relative-pointer clients receive
  * genuine device deltas instead of jumps caused by compositor cursor warps. */
 #define POINTER_ABS_RESET_MS 100
-#define POINTER_WARP_ZONE 0.25
+/* Recenter only once the pointer enters the outer 20% of the output, and at
+ * most every 20 ms. A warp confirmation can lag a few already-queued X11
+ * motion events behind, so wait up to 50 ms for the synthetic center sample. */
+#define POINTER_WARP_ZONE 0.20
 #define POINTER_WARP_INTERVAL_MS 20
+#define POINTER_WARP_TIMEOUT_MS 50
+#define POINTER_WARP_TOLERANCE_PX 2.0
 static bool pointer_abs_valid = false;
 static double pointer_abs_x = 0, pointer_abs_y = 0;
 static uint32_t pointer_abs_time = 0;
 static bool pointer_host_warp_pending = false;
 static uint32_t pointer_host_warp_time = 0;
+static double pointer_host_warp_x = 0, pointer_host_warp_y = 0;
 
 void pointer_reset_absolute_tracking(void) {
 	pointer_abs_valid = false;
@@ -66,15 +73,34 @@ void pointer_reset_absolute_tracking(void) {
 
 /* Returns true when a trustworthy delta from the previous absolute sample
  * exists; resets after an idle gap so a new touch/tap never becomes a jump. */
-static bool pointer_absolute_track(uint32_t time, double lx, double ly,
-								   double *dx, double *dy) {
+static bool pointer_absolute_track(uint32_t time, bool is_pointer, double lx,
+								   double ly, double *dx, double *dy) {
 	bool valid = pointer_abs_valid;
 
-	/* The compositor just recentered the host X11 pointer. This sample is
-	 * the synthetic echo of that warp, not user motion: swallow it once. */
-	if (pointer_host_warp_pending) {
-		pointer_host_warp_pending = false;
-		valid = false;
+	/* A host-pointer recenter was requested. The X server may still deliver
+	 * motion events that were already queued before the warp, so consume only
+	 * the sample that actually lands on the warp target. Swallowing the next
+	 * sample unconditionally turns the later center jump into a large false
+	 * backward delta (rubberbanding). Non-pointer samples must not consume a
+	 * warp confirmation. */
+	if (pointer_host_warp_pending && is_pointer) {
+		bool warp_echo =
+			fabs(lx - pointer_host_warp_x) <= POINTER_WARP_TOLERANCE_PX &&
+			fabs(ly - pointer_host_warp_y) <= POINTER_WARP_TOLERANCE_PX;
+		bool warp_expired = time && pointer_host_warp_time &&
+			(int32_t)(time - pointer_host_warp_time) >
+				POINTER_WARP_TIMEOUT_MS;
+
+		if (warp_echo) {
+			/* Synthetic echo of our own warp: re-seed, emit nothing. */
+			pointer_host_warp_pending = false;
+			valid = false;
+		} else if (warp_expired) {
+			/* Confirmation was lost (for example the pointer left the
+			 * window). Re-seed instead of forwarding an unknown jump. */
+			pointer_host_warp_pending = false;
+			valid = false;
+		}
 	}
 	if (valid && time && pointer_abs_time && time > pointer_abs_time &&
 		time - pointer_abs_time > POINTER_ABS_RESET_MS) {
@@ -173,8 +199,9 @@ static xcb_connection_t *pointer_host_x11_connection(void) {
 }
 
 /* Move the host X11 pointer to the middle of its screen so a locked game can
- * keep rotating instead of stalling when the X sprite reaches an edge. */
-static bool pointer_recenter_host_cursor(void) {
+ * keep rotating instead of stalling when the X sprite reaches an edge.
+ * Returns the target as normalized output coordinates. */
+static bool pointer_recenter_host_cursor(double *target_x, double *target_y) {
 	xcb_connection_t *conn = pointer_host_x11_connection();
 	if (!conn) {
 		return false;
@@ -186,29 +213,39 @@ static bool pointer_recenter_host_cursor(void) {
 		return false;
 	}
 	xcb_screen_t *screen = screens.data;
-	xcb_query_pointer_reply_t *reply = xcb_query_pointer_reply(
-		conn, xcb_query_pointer(conn, screen->root), NULL);
-	if (!reply) {
+
+	/* The setup geometry is cached for the connection lifetime and becomes
+	 * stale after a rotation, so ask the server for the current root size. */
+	xcb_get_geometry_reply_t *geom = xcb_get_geometry_reply(
+		conn, xcb_get_geometry(conn, screen->root), NULL);
+	if (!geom) {
+		return false;
+	}
+	uint16_t root_w = geom->width;
+	uint16_t root_h = geom->height;
+	free(geom);
+	if (root_w == 0 || root_h == 0) {
 		return false;
 	}
 
-	int16_t dx =
-		(int16_t)((int)screen->width_in_pixels / 2 - reply->root_x);
-	int16_t dy =
-		(int16_t)((int)screen->height_in_pixels / 2 - reply->root_y);
-	free(reply);
-	if (dx == 0 && dy == 0) {
-		return false;
-	}
+	int16_t wx = (int16_t)(root_w / 2);
+	int16_t wy = (int16_t)(root_h / 2);
 
-	xcb_warp_pointer(conn, XCB_NONE, XCB_NONE, 0, 0, 0, 0, dx, dy);
+	/* Absolute warp to the root center: no query round-trip and no drift from
+	 * pointer motion while the request is in flight. */
+	xcb_warp_pointer(conn, XCB_NONE, screen->root, 0, 0, 0, 0, wx, wy);
 	xcb_flush(conn);
-	pointer_host_warp_pending = true;
-	pointer_reset_absolute_tracking();
+
+	/* Termux:X11 exposes a full-screen output anchored at (0, 0), so the
+	 * center of the root screen is also the center of the wlroots output. */
+	*target_x = 0.5;
+	*target_y = 0.5;
 	return true;
 }
 #else
-static bool pointer_recenter_host_cursor(void) {
+static bool pointer_recenter_host_cursor(double *target_x, double *target_y) {
+	(void)target_x;
+	(void)target_y;
 	return false;
 }
 #endif
@@ -307,7 +344,7 @@ static bool pointer_locked_constraint_applies(
 static bool pointer_locked_applied = false;
 
 /* While a pointer constraint is locked, keep the host X11 pointer in the
- * middle 50% of the screen. Without this the parent X server clamps the sprite
+ * middle 60% of the screen. Without this the parent X server clamps the sprite
  * at the screen border, absolute deltas become zero and camera rotation stops. */
 static void pointer_maybe_recenter_host_cursor(
 	struct wlr_pointer_motion_absolute_event *event) {
@@ -317,7 +354,7 @@ static void pointer_maybe_recenter_host_cursor(
 		return;
 	}
 	if (pointer_host_warp_time &&
-		event->time_msec - pointer_host_warp_time <
+		(int32_t)(event->time_msec - pointer_host_warp_time) <
 			POINTER_WARP_INTERVAL_MS) {
 		return;
 	}
@@ -327,9 +364,19 @@ static void pointer_maybe_recenter_host_cursor(
 		event->y <= 1.0 - POINTER_WARP_ZONE) {
 		return;
 	}
-	if (pointer_recenter_host_cursor()) {
-		pointer_host_warp_time = event->time_msec;
+
+	/* Throttle failed attempts too: a missing host display must not turn every
+	 * motion event into an X round-trip. */
+	pointer_host_warp_time = event->time_msec;
+
+	double tx, ty;
+	if (!pointer_recenter_host_cursor(&tx, &ty)) {
+		return;
 	}
+	wlr_cursor_absolute_to_layout_coords(server.cursor, &event->pointer->base,
+										 tx, ty, &pointer_host_warp_x,
+										 &pointer_host_warp_y);
+	pointer_host_warp_pending = true;
 }
 
 static bool pointer_hint_applied = false;
@@ -1667,7 +1714,9 @@ void pointer_process_motion_absolute(uint32_t time,
 	double dx = lx - server.cursor->x;
 	double dy = ly - server.cursor->y;
 	double rel_dx = 0, rel_dy = 0;
-	bool rel_valid = pointer_absolute_track(time, lx, ly, &rel_dx, &rel_dy);
+	bool is_pointer = device && device->type == WLR_INPUT_DEVICE_POINTER;
+	bool rel_valid =
+		pointer_absolute_track(time, is_pointer, lx, ly, &rel_dx, &rel_dy);
 
 	pointer_process_motion_flags(time, device, dx, dy, dx, dy, true, rel_dx,
 								 rel_dy, rel_valid);
