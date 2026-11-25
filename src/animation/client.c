@@ -1822,8 +1822,11 @@ bool client_set_focus_opacity(Client *c) {
 			float blur_val = MIN(percent * (1.0 - config.fadein_begin_opacity) +
 									 config.fadein_begin_opacity,
 								 1.0);
+			/* Keep blur strength constant (1.0): changing it each frame
+			   invalidates the cached optimized blur and forces a full
+			   screen recompute. Visual fade is provided by alpha only. */
 			c->blur_opacity = blur_val;
-			wlr_scene_blur_set_strength(c->blur, blur_val);
+			wlr_scene_blur_set_strength(c->blur, 1.0f);
 			wlr_scene_blur_set_alpha(c->blur, blur_val);
 		}
 		client_set_state_colors(c, c->opacity_animation.current_border_color,
