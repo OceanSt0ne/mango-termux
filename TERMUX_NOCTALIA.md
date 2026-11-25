@@ -98,7 +98,8 @@ variables, and XKB overrides before restoring native values.
 
 - XDG paths are native: state and data live under `$HOME`, `XDG_DATA_DIRS` is `$PREFIX/share` only, and
   `XDG_CONFIG_DIRS` is `$PREFIX/etc/xdg`. `MESA_SHADER_CACHE_DIR` is `mesa_shader_cache_noctalia` under
-  `$HOME/.cache`, with `MESA_SHADER_CACHE_MAX_SIZE=256M`.
+  `$HOME/.cache`, with `MESA_SHADER_CACHE_MAX_SIZE=256M`; inherited `MESA_SHADER_CACHE_DISABLE`,
+  `MESA_GLSL_CACHE_DISABLE`, and `MESA_GLSL_VERSION_OVERRIDE` are unset so the cache stays active.
 - Graphics stay private: `__EGL_VENDOR_LIBRARY_DIRS="$PREFIX/libexec/mango-termux/egl_vendor.d"`, while
   `LIBGL_DRIVERS_PATH` and `GBM_BACKENDS_PATH` point inside the rootfs when present. No `VK_*` variable is
   exported; `noctalia-exec` rebuilds a native Vulkan ICD for children only from native Termux files, and

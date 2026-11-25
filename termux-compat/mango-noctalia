@@ -47,6 +47,13 @@ clear_foreign_env() {
 
 clear_foreign_env
 
+# Keep a persistent native Mesa shader cache for the Noctalia GL/GLES
+# pipeline and reject inherited settings that would disable or invalidate it.
+export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}
+unset MESA_SHADER_CACHE_DISABLE MESA_GLSL_CACHE_DISABLE MESA_GLSL_VERSION_OVERRIDE
+export MESA_SHADER_CACHE_DIR=$XDG_CACHE_HOME/mesa_shader_cache_noctalia
+export MESA_SHADER_CACHE_MAX_SIZE=256M
+
 requested_rootfs=${NOCTALIA_ROOTFS:-}
 
 if [[ -n $requested_rootfs ]]; then
