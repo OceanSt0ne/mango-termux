@@ -113,6 +113,8 @@ MANGO_TERMUX_RENDERER=ahb mango-termux
 MANGO_TERMUX_RENDERER=pixman mango-termux
 ```
 
+On 2K displays, enable window blur only with the optimized path and no more than two passes. The mobile 2K defaults from `assets/config.conf` are `blur=1`, `blur_optimized=1`, `blur_params_num_passes = 2`, `blur_params_radius = 4`; more passes or layer blur cause FPS drops on Adreno 735 (see section 10).
+
 If the session does not appear, check the Termux:X11 app and the launcher log at `$PREFIX/tmp/termux-x11.log`.
 
 ## 5. Launcher and Environment
@@ -142,8 +144,12 @@ If the session does not appear, check the Termux:X11 app and the launcher log at
 | `WLR_XWAYLAND` | auto | Override the Xwayland binary |
 | `XDG_RUNTIME_DIR` | `$PREFIX/tmp` | Wayland/X11 runtime directory |
 | `NOCTALIA_ROOTFS` | auto | Rootfs used by the native Noctalia installer |
+| `MESA_SHADER_CACHE_DIR` | `$HOME/.cache/mesa_shader_cache_noctalia` | Mesa shader cache directory used by `mango-noctalia` |
+| `MESA_SHADER_CACHE_MAX_SIZE` | `268435456` (256 MB) | Maximum Mesa shader cache size in bytes |
 
 `TERMINAL` and the `XKB_*` defaults are set automatically; override them only when necessary.
+
+`mango-noctalia` exports `MESA_SHADER_CACHE_DIR` and `MESA_SHADER_CACHE_MAX_SIZE` for Noctalia children and unsets `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE`, and `MESA_GLSL_VERSION_OVERRIDE` so the Mesa shader cache stays enabled in the Noctalia rootfs.
 
 ```bash
 MANGO_X11_DISPLAY=:1 mango-termux
@@ -172,7 +178,7 @@ Reload the shipped default with `Super+R`. User configs may remap it. The mobile
 blur=1
 blur_layer=0
 blur_optimized=1
-blur_params_num_passes = 1
+blur_params_num_passes = 2
 blur_params_radius = 4
 shadows = 1
 layer_shadows = 0
@@ -180,9 +186,15 @@ shadow_only_floating = 1
 shadows_size = 8
 shadows_blur = 10
 border_radius=12
+
+layer_animations = 0
+animation_duration_move = 300
+animation_duration_open = 250
+animation_duration_tag = 250
+animation_duration_close = 250
 ```
 
-Effects require the GPU path (`mango-termux`), not software `pixman`. The build script writes this profile only when `$HOME/.config/mango/config.conf` does not exist yet; existing configs are never overwritten, so apply these values manually and reload with `Super+R` (or restart the session with `mango-termux --restart`) if window animations still stutter.
+Effects require the GPU path (`mango-termux`), not software `pixman`. The build script writes this profile only when `$HOME/.config/mango/config.conf` does not exist yet; existing configs are never overwritten, so apply these values manually and reload with `Super+R` (or restart the session with `mango-termux --restart`) if window animations still stutter. On 2K displays the shortened animation durations and `layer_animations = 0` reduce overdraw together with `blur_params_num_passes <= 2`.
 
 Default keybindings from the shipped `assets/config.conf`:
 
@@ -223,6 +235,12 @@ Default `turnip` mode:
 The private KGSL stack is installed by `termux-compat/install-freedreno-kgsl.sh`. It uses the pinned lfdevs release `freedreno-27.0.0-devel-20261025-r2`, verifies SHA-256, backs up an old tree as `mesa-kgsl.bak.<timestamp>`, and does not replace stock Termux Mesa.
 
 AHB caveat: Termux:X11 presents through SHM copies, so AHB removes GPU and driver limits but does not eliminate the copy to the Android surface.
+
+Rendering performance:
+
+- Optimized blur (`blur_optimized=1`) caches the wallpaper texture and re-renders it only on partial damage. Window open animations keep blur strength constant (`wlr_scene_blur_set_strength(c->blur, 1.0f)`) and fade with alpha only, so the optimized blur is not invalidated per frame.
+- Each blur `fx_framebuffer` holds a persistent `wlr_texture` cache; textures are destroyed only when the buffer changes or the framebuffer is freed, removing `wlr_texture_destroy`/`fx_texture_from_buffer` from the hot path.
+- Pointer lock in nested X11 (commits `37fa059`, `95fd8d4`) confirms pointer warp before recentering the host pointer and stops camera spin in locked-pointer games.
 
 Xwayland:
 
@@ -272,6 +290,8 @@ Noctalia settings for this port:
 - `reserve_space = true` for the top and bottom bars so client titlebars are not drawn underneath them;
 - overlay launchers may take keyboard focus; top and bottom layer bars must not steal focus from clients.
 
+The `mango-noctalia` launcher keeps the Mesa shader cache enabled for Noctalia children: it exports `MESA_SHADER_CACHE_DIR=$HOME/.cache/mesa_shader_cache_noctalia` and `MESA_SHADER_CACHE_MAX_SIZE=268435456` (256 MB), and unsets `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE`, and `MESA_GLSL_VERSION_OVERRIDE`.
+
 After changes, run `mango-integrate --check` and `mango-termux --restart`.
 
 ## 9. Integrations and Helper Scripts
@@ -319,8 +339,9 @@ Common issues:
 - `gbm.h` missing: `pkg install mesa-dev`.
 - Termux:X11 not reachable: open the app, run `mango-x11-check`, and read `$PREFIX/tmp/termux-x11.log`.
 - llvmpipe or no effects: install the KGSL stack, verify `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so`, then run `mango-termux --restart`.
+- FPS drop when opening windows: blur re-renders at high pass counts. Use the mobile 2K default `blur=1 blur_optimized=1 blur_params_num_passes=2` (`blur_params_radius = 4`), or disable blur entirely with `blur=0` / `blur_layer=0` and reload with `Super+R`.
 - Nested Xwayland dies or an X11 GL client aborts: keep `MANGO_XWAYLAND_GLAMOR=0` (default) and do not force glamor.
-- 3D games with a locked cursor (Minecraft/LWJGL/GLFW) spin, snap to ±90°, or stop rotating at the screen edge: keep Termux:X11 in trackpad mode with `MANGO_X11_INPUT_PREFS=touchMode:1` (the default) and restart with `mango-termux --restart`. While the cursor is locked, MangoWM recenters the host pointer automatically, so rotation is unlimited. `touchMode` values 2 and 3 send absolute touch coordinates and break pointer lock. Inspect or override the live values with `termux-x11-preference list` and `termux-x11-preference touchMode:1`.
+- 3D games with a locked cursor (Minecraft/LWJGL/GLFW) spin, snap to ±90°, or stop rotating at the screen edge: keep Termux:X11 in trackpad mode with `MANGO_X11_INPUT_PREFS=touchMode:1` (the default) and restart with `mango-termux --restart`. While the cursor is locked, MangoWM recenters the host pointer automatically, so rotation is unlimited. `touchMode` values 2 and 3 send absolute touch coordinates and break pointer lock. Inspect or override the live values with `termux-x11-preference list` and `termux-x11-preference touchMode:1`. Pointer-warp confirmation before recentering (`37fa059`) and the pointer-lock camera-spin fix on nested X11 (`95fd8d4`) are included in this port.
 - An X11 app opens on the outer `:0`: make sure it inherits `DISPLAY=:1` from the Mango session, and rebuild with Xwayland enabled.
 - Firefox WebGL fails: run `mango-integrate`, then `termux-compat/install-firefox-webgl.sh`, and restart the session.
 - Noctalia has no rootfs: use `--bootstrap-rootfs` or `--rootfs`; validate with `--check`; `patchelf` is needed for the fallback binary.

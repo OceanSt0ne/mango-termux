@@ -113,6 +113,16 @@ MANGO_TERMUX_RENDERER=ahb mango-termux
 MANGO_TERMUX_RENDERER=pixman mango-termux
 ```
 
+На экранах 2K размытие включайте только с оптимизированным проходом и не более двух проходов, иначе резко упадёт FPS:
+
+```ini
+blur=1
+blur_optimized=1
+blur_params_num_passes=2
+```
+
+Затем перечитайте конфигурацию `Super+R` или перезапустите сессию `mango-termux --restart`.
+
 Если сессия не появилась, проверьте приложение Termux:X11 и журнал launcher `$PREFIX/tmp/termux-x11.log`.
 
 ## 5. Запуск и окружение
@@ -143,6 +153,8 @@ MANGO_TERMUX_RENDERER=pixman mango-termux
 | `XDG_RUNTIME_DIR` | `$PREFIX/tmp` | Каталог сокетов Wayland/X11 |
 | `NOCTALIA_ROOTFS` | авто | Rootfs для установщика нативной Noctalia |
 
+Кэш шейдеров Mesa: лаунчер `mango-noctalia` экспортирует `MESA_SHADER_CACHE_DIR=$XDG_CACHE_HOME/mesa_shader_cache_noctalia` (по умолчанию `$HOME/.cache/mesa_shader_cache_noctalia`) с `MESA_SHADER_CACHE_MAX_SIZE=256M` и снимает унаследованные `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE` и `MESA_GLSL_VERSION_OVERRIDE`, чтобы кэш шейдеров не инвалидировался между запусками Noctalia.
+
 `TERMINAL` и переменные `XKB_*` задаются автоматически; переопределяйте их только при необходимости.
 
 ```bash
@@ -172,7 +184,7 @@ mango-termux --restart -s foot
 blur=1
 blur_layer=0
 blur_optimized=1
-blur_params_num_passes = 1
+blur_params_num_passes = 2
 blur_params_radius = 4
 shadows = 1
 layer_shadows = 0
@@ -180,9 +192,14 @@ shadow_only_floating = 1
 shadows_size = 8
 shadows_blur = 10
 border_radius=12
+animation_duration_move=300
+animation_duration_open=250
+animation_duration_tag=250
+animation_duration_close=250
+layer_animations = 0
 ```
 
-Эффекты требуют GPU-пути (`mango-termux`), а не программного `pixman`. Скрипт сборки записывает этот профиль только если `$HOME/.config/mango/config.conf` ещё не существует; существующие конфигурации никогда не перезаписываются, поэтому примените эти значения вручную и перечитайте конфигурацию по `Super+R` (или перезапустите сессию через `mango-termux --restart`), если анимации окон всё ещё дёргаются.
+На 2K включайте размытие только при `blur_optimized=1` и `blur_params_num_passes<=2`; больше проходов или неоптимизированное размытие дают заметное падение FPS. Эффекты требуют GPU-пути (`mango-termux`), а не программного `pixman`. Скрипт сборки записывает этот профиль только если `$HOME/.config/mango/config.conf` ещё не существует; существующие конфигурации никогда не перезаписываются, поэтому примените эти значения вручную и перечитайте конфигурацию по `Super+R` (или перезапустите сессию через `mango-termux --restart`), если анимации окон всё ещё дёргаются.
 
 Горячие клавиши по умолчанию из `assets/config.conf`:
 
@@ -231,6 +248,13 @@ Xwayland:
 - `WLR_XWAYLAND` переопределяет реальный сервер.
 - X11-приложения обычно видят `DISPLAY=:1`; внешний корень Termux:X11 — `:0`.
 
+Производительность:
+
+- Оптимизированное размытие (`blur_optimized=1`) кэширует обои и обновляет только при пересечении с ущербом экрана (partial damage), без полной перерисовки вывода каждый кадр.
+- Кэш `wlr_texture` для blur-FBO: текстуры хранятся внутри каждой `fx_framebuffer`, инвалидация только при смене буфера или destroy — в горячем пути нет `wlr_texture_destroy`/`fx_texture_from_buffer`.
+- При OPEN-анимации окна сила размытия фиксирована в `1.0`, затухание идёт только через alpha, чтобы не инвалидировать оптимизированное размытие.
+- KGSL/Turnip (Freedreno) на Adreno 735; кэш шейдеров Mesa в `$HOME/.cache/mesa_shader_cache_noctalia` (256МБ), управляемый лаунчером `mango-noctalia`.
+
 ## 8. Нативная Noctalia
 
 Noctalia 5.4.1 работает в Termux нативно через glibc-загрузчик Termux. Rootfs Arch служит только источником бинарника, ресурсов и библиотек Noctalia; PRoot применяется лишь для необязательной начальной установки rootfs и пакетов, но никогда во время работы.
@@ -273,6 +297,8 @@ Noctalia 5.4.1 работает в Termux нативно через glibc-заг
 ```
 
 Флаги установщика: `--rootfs PATH`, `--force`, `--check`, `--no-integrate`, `--bootstrap-rootfs`, `--no-bootstrap`, `--quiet`, `-h`/`--help`. Режим `--check` только читает файлы, `--force` пересобирает приватную среду. После изменений выполните `mango-integrate --check` и `mango-termux --restart`.
+
+Лаунчер `mango-noctalia` экспортирует `MESA_SHADER_CACHE_DIR`/`MESA_SHADER_CACHE_MAX_SIZE` (кэш в `$HOME/.cache/mesa_shader_cache_noctalia`, 256МБ) и снимает `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE`, `MESA_GLSL_VERSION_OVERRIDE`, чтобы кэш шейдеров Mesa сохранялся между запусками Noctalia.
 
 ## 9. Интеграции и вспомогательные скрипты
 
@@ -319,8 +345,9 @@ vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName'
 - Нет `gbm.h`: установите `pkg install mesa-dev`.
 - Termux:X11 недоступен: откройте приложение, выполните `mango-x11-check`, прочитайте `$PREFIX/tmp/termux-x11.log`.
 - llvmpipe или отсутствие эффектов: установите стек KGSL, проверьте `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so` и перезапустите сессию через `mango-termux --restart`.
+- FPS проседает при открытии окон: отключите размытие (`blur=0`) или снизьте `blur_params_num_passes` до ≤2 с `blur_optimized=1` (рекомендуемый мобильный профиль для 2K).
 - Вложенный Xwayland падает или X11-клиент с GL завершается: оставьте `MANGO_XWAYLAND_GLAMOR=0` (значение по умолчанию) и не включайте glamor принудительно.
-- 3D-игры с захватом курсора (Minecraft/LWJGL/GLFW) крутят камеру, упираются в ±90° или перестают вращаться у края экрана: держите Termux:X11 в режиме тачпада с `MANGO_X11_INPUT_PREFS=touchMode:1` (значение по умолчанию) и перезапускайте через `mango-termux --restart`. Пока курсор захвачен, MangoWM автоматически возвращает внешний указатель к центру, поэтому вращение не ограничено. Значения `touchMode` 2 и 3 передают абсолютные координаты касаний и ломают захват курсора. Посмотреть или переопределить живые значения: `termux-x11-preference list` и `termux-x11-preference touchMode:1`.
+- 3D-игры с захватом курсора (Minecraft/LWJGL/GLFW) крутят камеру, упираются в ±90° или перестают вращаться у края экрана: держите Termux:X11 в режиме тачпада с `MANGO_X11_INPUT_PREFS=touchMode:1` (значение по умолчанию) и перезапускайте через `mango-termux --restart`. Пока курсор захвачен, MangoWM автоматически возвращает внешний указатель к центру, поэтому вращение не ограничено. Значения `touchMode` 2 и 3 передают абсолютные координаты касаний и ломают захват курсора. Посмотреть или переопределить живые значения: `termux-x11-preference list` и `termux-x11-preference touchMode:1`. Баги pointer-lock в вложенном X11 исправлены коммитами 37fa059 (подтверждение варпа указателя до рецентринга) и 95fd8d4 (остановка вращения камеры при захвате).
 - X11-приложение открывается на внешнем `:0`: оно должно наследовать `DISPLAY=:1` от сессии Mango; пересоберите проект с включённым Xwayland.
 - Firefox WebGL: выполните `mango-integrate`, затем `termux-compat/install-firefox-webgl.sh` и перезапустите сессию.
 - Noctalia: при отсутствии rootfs используйте `--bootstrap-rootfs` или `--rootfs`; проверяйте через `--check`; для резервного бинарника нужен `patchelf`.
