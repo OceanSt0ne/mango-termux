@@ -47,6 +47,10 @@ struct fx_framebuffer {
 	GLuint tex;
 	GLuint sb; // Stencil
 
+	// Cached wlr_texture wrapping fb->buffer. Invalidated when the buffer
+	// is replaced or the framebuffer is destroyed.
+	struct wlr_texture *wlr_texture;
+
 	struct wlr_addon addon;
 };
 

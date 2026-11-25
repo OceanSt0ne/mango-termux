@@ -79,6 +79,12 @@ void fx_framebuffer_get_or_create_custom(struct fx_renderer *renderer,
 			if (wlr_buffer->width == width && wlr_buffer->height == height) {
 				return;
 			}
+			// The buffer is about to be replaced, so the cached texture
+			// wrapping it is no longer valid.
+			if ((*fx_framebuffer)->wlr_texture != NULL) {
+				wlr_texture_destroy((*fx_framebuffer)->wlr_texture);
+				(*fx_framebuffer)->wlr_texture = NULL;
+			}
 			// Create a new wlr_buffer if it's null or if the output size has
 			// changed
 			wlr_buffer_drop(wlr_buffer);
@@ -193,6 +199,11 @@ void fx_framebuffer_destroy(struct fx_framebuffer *fx_buffer) {
 	fx_buffer->sb = -1;
 
 	wlr_egl_destroy_image(fx_buffer->renderer->egl, fx_buffer->image);
+
+	if (fx_buffer->wlr_texture != NULL) {
+		wlr_texture_destroy(fx_buffer->wlr_texture);
+		fx_buffer->wlr_texture = NULL;
+	}
 
 	wlr_egl_restore_context(&prev_ctx);
 

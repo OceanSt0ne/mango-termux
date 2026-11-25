@@ -841,6 +841,18 @@ void fx_render_pass_add_box_shadow(struct fx_gles_render_pass *pass,
 	TRACY_BOTH_ZONES_END;
 }
 
+// Returns the wlr_texture wrapping the framebuffer's buffer, creating and
+// caching it on the framebuffer on first use. The cache is invalidated when
+// the framebuffer's buffer is replaced (see fx_framebuffer.c).
+static struct wlr_texture *fx_framebuffer_get_cached_texture(
+		struct fx_renderer *renderer, struct fx_framebuffer *fb) {
+	if (fb->wlr_texture == NULL) {
+		fb->wlr_texture = fx_texture_from_buffer(&renderer->wlr_renderer,
+				fb->buffer);
+	}
+	return fb->wlr_texture;
+}
+
 // Renders the blur for each damaged rect and swaps the buffer
 static void render_blur_segments(struct fx_gles_render_pass *pass,
 		struct fx_render_blur_pass_options *fx_options, struct blur_shader* shader) {
@@ -859,8 +871,8 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
 		fx_framebuffer_bind(pass->fx_offscreen_buffers->effects_buffer);
 	}
 
-	options->texture = fx_texture_from_buffer(&renderer->wlr_renderer,
-			fx_options->current_buffer->buffer);
+	options->texture = fx_framebuffer_get_cached_texture(renderer,
+			fx_options->current_buffer);
 	struct fx_texture *texture = fx_get_texture(options->texture);
 
 	/*
@@ -922,8 +934,6 @@ static void render_blur_segments(struct fx_gles_render_pass *pass,
 	glBindTexture(texture->target, 0);
 	pop_fx_debug(renderer);
 	TRACY_BOTH_ZONES_END;
-
-	wlr_texture_destroy(options->texture);
 
 	// Swap buffer. We don't want to draw to the same buffer
 	if (fx_options->current_buffer != pass->fx_offscreen_buffers->effects_buffer) {
@@ -996,8 +1006,6 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
 
 	pop_fx_debug(renderer);
 	TRACY_BOTH_ZONES_END;
-
-	wlr_texture_destroy(options->texture);
 }
 
 // Blurs the fx_options current_buffer content and returns the blurred framebuffer.
@@ -1104,8 +1112,8 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 			fx_framebuffer_bind(pass->fx_offscreen_buffers->effects_buffer);
 		}
 		fx_options->tex_options.base.clip = &damage;
-		fx_options->tex_options.base.texture = fx_texture_from_buffer(
-				&renderer->wlr_renderer, fx_options->current_buffer->buffer);
+		fx_options->tex_options.base.texture = fx_framebuffer_get_cached_texture(
+				renderer, fx_options->current_buffer);
 		render_blur_effects(pass, fx_options);
 		if (fx_options->current_buffer != pass->fx_offscreen_buffers->effects_buffer) {
 			fx_options->current_buffer = pass->fx_offscreen_buffers->effects_buffer;
