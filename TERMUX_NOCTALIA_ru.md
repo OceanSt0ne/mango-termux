@@ -19,18 +19,20 @@
 
 ## 1. Обзор
 
-Noctalia 5.4.1 — обычный Wayland-клиент вложенного композитора MangoWM внутри Termux:X11. Второй композитор не запускается.
+Noctalia 5.6.x — обычный Wayland-клиент вложенного композитора MangoWM внутри Termux:X11. Второй композитор не запускается.
 
 - Noctalia работает нативно: лаунчер запускает ELF-файл rootfs через glibc-загрузчик Termux, поэтому во время работы нет процессов `proot` или `proot-distro`, а процессы rootfs не запускают Noctalia.
 - Arch Linux ARM rootfs служит только источником бинарника, библиотек и ресурсов. `proot-distro` применяется только для необязательного bootstrap rootfs и обновления пакетов.
+- Noctalia 5.6 не является Qt/QML-приложением: сборка использует GLib, Pango и Cairo, а условные Qt/QML-переменные остаются неактивными.
 - Канонический установщик — `install-noctalia-termux.sh`: он один раз находит rootfs, собирает приватное окружение в `$PREFIX/libexec/mango-termux` и устанавливает лаунчеры и обёртки.
 - Настройки лежат в `$HOME/.local/state/noctalia/settings.toml` с запасным путём `$HOME/.config/noctalia/settings.toml`; MangoWM читает `$HOME/.config/mango/`.
 
 ## 2. Требования
 
 - Рабочая сессия Termux и MangoWM в Termux:X11 со стеком Adreno Mesa из этого проекта. `proot-distro` и сеть нужны только для bootstrap rootfs и обновления пакетов.
-- Пригодный rootfs с файлами `usr/bin/noctalia`, `lib/ld-linux-aarch64.so.1` и `usr/lib/libstdc++.so.6`; все три обязательны.
-- Загрузчик glibc Termux по пути `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`, иначе установщик сообщает `FAIL: Termux loader missing`. `patchelf` необязателен: прямому режиму не нужен патченный бинарник.
+- Пригодный rootfs с файлами `usr/bin/noctalia`, `lib/ld-linux-aarch64.so.1`, `usr/lib/libstdc++.so.6` и `usr/share/noctalia/assets`; все четыре обязательны.
+- Загрузчик glibc Termux по пути `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`, который предоставляет пакет `glibc-runner`. Если его нет, установщик завершается с сообщением `Termux glibc loader missing ... (install it with: apt install glibc-runner)`; `--check` сообщает `FAIL: Termux loader missing`. `patchelf` необязателен: прямому режиму не нужен патченный бинарник.
+- Терминал для `noctalia-terminal`: рекомендуется `foot`, запасные варианты — `kitty` и `ghostty`. Без него `runInTerminal` в Noctalia завершается с `noctalia-terminal: no supported terminal found in $PREFIX/bin`.
 - D-Bus необязателен. Отсутствие сессионной шины не фатально; если `DBUS_SESSION_BUS_ADDRESS` не задан, а `dbus-run-session` доступен, обычный запуск перезапускается в нативной сессионной шине Termux.
 
 ## 3. Установка
@@ -38,9 +40,9 @@ Noctalia 5.4.1 — обычный Wayland-клиент вложенного ко
 Поиск выполняется один раз, при установке: `--rootfs PATH`, `NOCTALIA_ROOTFS`, `$PREFIX/var/lib/proot-distro/installed-rootfs/*`, затем `$PREFIX/var/lib/proot-distro/containers/*/rootfs`.
 
 - Если пригодного rootfs нет и явного переопределения нет, установщик разворачивает `archlinuxarm` через `proot-distro`, затем выполняет `pacman -Syu --noconfirm` и `pacman -S --needed --noconfirm noctalia`.
-- Явный `--rootfs` или `NOCTALIA_ROOTFS` при непригодном дереве сразу завершается ошибкой и не запускает bootstrap; `--no-bootstrap` превращает отсутствие rootfs в ошибку, а `--bootstrap-rootfs` явно запрашивает bootstrap. `--check` только читает файлы, `--force` пересобирает приватное окружение без удаления rootfs, `--no-integrate` пропускает интеграцию, `--quiet` сокращает вывод.
-- Установщик создаёт `$PREFIX/libexec/mango-termux` с `rootfs-libs/`, `egl_vendor.d/50_mesa.json`, `vulkan/icd.d/freedreno_icd.aarch64.json`, `runtime.env` и необязательным патченным `noctalia-native`; затем ставит `noctalia` и побайтово идентичный `mango-noctalia`, а также `noctalia-exec` и `noctalia-terminal`.
-- Затем он запускает `mango-integrate`, переносит конфигурацию, состояние, данные и обои, переписывает пути `/root/`, обеспечивает `exec=noctalia`, `launch_apps_custom_command = "noctalia-exec $CMD"` и `reserve_space = true`, а также прогревает кэши.
+- Явный `--rootfs` или `NOCTALIA_ROOTFS` при непригодном дереве сразу завершается ошибкой и не запускает bootstrap; `--no-bootstrap` превращает отсутствие rootfs в ошибку, а `--bootstrap-rootfs` явно запрашивает bootstrap. `--check` только читает файлы и дополнительно проверяет ссылки на ресурсы и подключение автозапуска `mics.conf`; `--force` пересобирает приватное окружение без удаления rootfs, `--no-integrate` пропускает интеграцию, `--quiet` сокращает вывод.
+- Установщик создаёт `$PREFIX/libexec/mango-termux` с `rootfs-libs/`, `egl_vendor.d/50_mesa.json`, `vulkan/icd.d/freedreno_icd.aarch64.json`, `runtime.env` и необязательным патченным `noctalia-native`; он связывает `$ROOTFS/usr/share/noctalia/assets` с `$PREFIX/glibc/lib/assets`, `$PREFIX/glibc/share/noctalia/assets`, `$PREFIX/libexec/mango-termux/assets` и `$PREFIX/libexec/mango-termux/share/noctalia/assets`. Noctalia 5.6 ищет ресурсы относительно загрузчика, поэтому эти ссылки обязательны. Затем установщик ставит `noctalia` и побайтово идентичный `mango-noctalia`, а также `noctalia-exec` и `noctalia-terminal`.
+- Затем он запускает `mango-integrate`, переносит конфигурацию, состояние, данные и обои, переписывает пути `/root/`, обеспечивает `exec=noctalia` в `mics.conf` и `source=./mics.conf` в `config.conf`, задаёт `launch_apps_custom_command = "noctalia-exec $CMD"` и `reserve_space = true`, а также прогревает кэши.
 
 ```bash
 ./install-noctalia-termux.sh
@@ -71,10 +73,11 @@ exec "$NOCTALIA_LOADER" --library-path "$NOCTALIA_RPATH" \
 Лаунчер очищает унаследованные `LD_*`, `PROOT_*`, переопределения Mesa, EGL и Vulkan из rootfs, пути Qt/QML, переменные IM и переопределения XKB, после чего выставляет нативные значения.
 
 - Пути XDG нативные: состояние и данные лежат в `$HOME`, `XDG_DATA_DIRS` равен только `$PREFIX/share`, а `XDG_CONFIG_DIRS` — `$PREFIX/etc/xdg`. `MESA_SHADER_CACHE_DIR` указывает на `mesa_shader_cache_noctalia` в `$HOME/.cache`, а `MESA_SHADER_CACHE_MAX_SIZE` равен `256M`; унаследованные `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE` и `MESA_GLSL_VERSION_OVERRIDE` снимаются, чтобы кэш оставался активным.
-- Графика остаётся приватной: `__EGL_VENDOR_LIBRARY_DIRS="$PREFIX/libexec/mango-termux/egl_vendor.d"`, а `LIBGL_DRIVERS_PATH` и `GBM_BACKENDS_PATH` при наличии указывают внутрь rootfs. Переменные `VK_*` не экспортируются; `noctalia-exec` собирает нативный Vulkan ICD для дочерних приложений только из нативных файлов Termux, а `NOCTALIA_ASSETS_DIR` указывает на `$ROOTFS/usr/share/noctalia/assets`.
+- Графика остаётся приватной: `__EGL_VENDOR_LIBRARY_DIRS="$PREFIX/libexec/mango-termux/egl_vendor.d"`, а `LIBGL_DRIVERS_PATH` и `GBM_BACKENDS_PATH` при наличии указывают внутрь rootfs. Переменные `VK_*` не экспортируются; `noctalia-exec` собирает нативный Vulkan ICD для дочерних приложений только из нативных файлов Termux.
+- Noctalia 5.6 ищет ресурсы относительно glibc-загрузчика, а не по `NOCTALIA_ASSETS_DIR`. Установщик связывает `$ROOTFS/usr/share/noctalia/assets` с `$PREFIX/glibc/lib/assets`, `$PREFIX/glibc/share/noctalia/assets` и аналогичными путями приватной среды. `runtime.env` по-прежнему записывает `NOCTALIA_ASSETS_DIR` для совместимости, но бинарник использует именно ссылки.
 - XKB нативный: `XKB_CONFIG_ROOT="$PREFIX/share/X11/xkb"` со значениями по умолчанию `XKB_DEFAULT_LAYOUT=us,ru`, `XKB_DEFAULT_OPTIONS=grp:win_space_toggle`, `XKB_DEFAULT_RULES=evdev` и `XKB_DEFAULT_MODEL=pc105`; приоритет остаётся за `input.conf` в MangoWM.
 - `TERMINAL` сохраняет существующее исполняемое значение; иначе лаунчер пробует `$PREFIX/bin/noctalia-terminal`, затем `foot`, `kitty`, `ghostty`, `alacritty`, `wezterm` и `xterm`. `run-mango.sh` также по умолчанию выбирает `$PREFIX/bin/noctalia-terminal`.
-- Qt и QML включаются условно: при `NOCTALIA_HAS_QT=0` переменные `QML2_IMPORT_PATH`, `QT_PLUGIN_PATH` и `QML_DISK_CACHE_PATH` не выставляются и не действуют для текущего бинарника.
+- Qt и QML неактивны для Noctalia 5.6 (`NOCTALIA_HAS_QT=0`): бинарник основан на GLib/Pango/Cairo и не линкуется с `libQt6`, поэтому `QML2_IMPORT_PATH`, `QT_PLUGIN_PATH` и `QML_DISK_CACHE_PATH` не выставляются. Лаунчер сохраняет условный экспорт Qt/QML только для старых или альтернативных Qt-сборок, обнаруженных при установке.
 
 `runtime.env` содержит `NOCTALIA_ROOTFS`, `NOCTALIA_LOADER`, `NOCTALIA_RPATH`, `NOCTALIA_NATIVE_BIN`, `NOCTALIA_ASSETS_DIR`, `NOCTALIA_EGL_DIR`, `NOCTALIA_LIBGL_DRIVERS`, `NOCTALIA_GBM_BACKENDS` и `NOCTALIA_HAS_QT`.
 
@@ -82,14 +85,14 @@ exec "$NOCTALIA_LOADER" --library-path "$NOCTALIA_RPATH" \
 cat "$PREFIX/libexec/mango-termux/runtime.env"
 ```
 
-При `NOCTALIA_HAS_QT=1` лаунчер также экспортирует `QML2_IMPORT_PATH`, `QML_IMPORT_PATH`, `QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`, `QML_DISK_CACHE_PATH` и `QT_LOGGING_RULES`. Нативными также являются `TERM=xterm-256color`, если переменная не задана или равна `dumb`, `TERMINFO=$PREFIX/share/terminfo` и `FONTCONFIG_PATH="$PREFIX/etc/fonts"` при наличии каталога.
+Для старой или альтернативной Qt-сборки (`NOCTALIA_HAS_QT=1`) лаунчер также экспортирует `QML2_IMPORT_PATH`, `QML_IMPORT_PATH`, `QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`, `QML_DISK_CACHE_PATH` и `QT_LOGGING_RULES`. Нативными также являются `TERM=xterm-256color`, если переменная не задана или равна `dumb`, `TERMINFO=$PREFIX/share/terminfo` и `FONTCONFIG_PATH="$PREFIX/etc/fonts"` при наличии каталога.
 
 ## 6. Интеграция с MangoWM
 
 MangoWM записывает `MANGO_INSTANCE_SIGNATURE` с путём к своему IPC-сокету `$XDG_RUNTIME_DIR/mango-<pid>.sock` в `src/ipc/ipc.c`.
 
 - Лаунчер сохраняет унаследованное значение, поэтому Noctalia определяет Mango и использует нативный workspace-бэкенд `mango-ipc` через `mmsg`. Если подпись отсутствует или непригодна, в лог пишется `Mango detected but MANGO_INSTANCE_SIGNATURE socket IPC is missing or unusable`, после чего используется `ext-workspace`.
-- В `mics.conf` есть одна строка автозапуска `exec=noctalia`; биндинги вызывают `noctalia msg panel-toggle launcher`, `noctalia msg panel-toggle wallpaper`, а также действия громкости и яркости. `noctalia msg ...` и `mmsg` — нативные клиенты, которым не нужен D-Bus, а `mmsg get version` проверяет живость IPC.
+- В `mics.conf` есть одна строка автозапуска `exec=noctalia`; установщик и `mango-integrate` обеспечивают наличие `source=./mics.conf` в `config.conf`. Биндинги `noctalia msg` по умолчанию не устанавливаются; при необходимости добавьте их в `config.conf` или подключаемый `binds.conf`. `noctalia msg ...` и `mmsg` — нативные клиенты, которым не нужен D-Bus, а `mmsg get version` проверяет живость IPC.
 - `mango-integrate` принимает `--quiet`, `--check`, `--no-firefox`, `--no-terminals` и `-h`/`--help`; `--check` только читает файлы и завершается с ненулевым кодом при отсутствии обёрток или патченных элементов рабочего стола.
 - Панели используют layer-shell, а `reserve_space = true` не даёт заголовкам тайловых окон скрываться под ними; верхние и нижние панели не забирают фокус клавиатуры, а оверлейные лаунчеры могут. `run-mango.sh --restart` и `mango-termux --restart` обновляют интеграцию и завершают оставшуюся Noctalia; `MANGO_SKIP_INTEGRATIONS=1` пропускает обновление интеграции.
 
@@ -97,7 +100,9 @@ MangoWM записывает `MANGO_INSTANCE_SIGNATURE` с путём к сво�
 ls -l "$PREFIX/tmp"/mango-*.sock
 MANGO_INSTANCE_SIGNATURE="$(ls "$PREFIX/tmp"/mango-*.sock | head -1)" \
   mmsg get version
-grep -n 'noctalia msg' "$HOME/.config/mango/binds.conf"
+grep -n 'source=.*mics.conf' "$HOME/.config/mango/config.conf"
+grep -n 'noctalia msg' "$HOME/.config/mango/config.conf" \
+  "$HOME/.config/mango/binds.conf" 2>/dev/null || true
 ```
 
 ## 7. Дочерние приложения
@@ -107,7 +112,7 @@ grep -n 'noctalia msg' "$HOME/.config/mango/binds.conf"
 - Она читает `$PREFIX/tmp/mango-session.env`, но приоритет отдаёт живым значениям `WAYLAND_DISPLAY`, `DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, `MANGO_INSTANCE_SIGNATURE`, `XCURSOR_THEME` и `XCURSOR_SIZE`.
 - Она выставляет нативную идентичность Termux (`PREFIX`, `HOME`, `TMPDIR`, `PATH`, `SHELL`, `XDG_*`, `TERMINAL`, `TERM`) и удаляет переменные rootfs, glibc и приватного окружения Noctalia: `__EGL_VENDOR_LIBRARY_DIRS`, `LIBGL_DRIVERS_PATH`, `GBM_BACKENDS_PATH` из rootfs, `QML*`, `QT_*`, `MESA_SHADER_CACHE_*`, `NOCTALIA_*`, `LD_PRELOAD`, а также чужие переменные IM и XKB. `XDG_DATA_DIRS` остаётся `$PREFIX/share`, поэтому приложения, иконки и GSchemas из rootfs к детям не попадают. Обёртка завершается вызовом `exec "$@"`.
 - Она восстанавливает нативный XKB и собирает пути KGSL и Turnip только из реальных файлов Termux в `$PREFIX/opt/mesa-kgsl` или `$PREFIX`, выставляя `MESA_LOADER_DRIVER_OVERRIDE=kgsl`, `GALLIUM_DRIVER=kgsl`, нативный `LIBGL_DRIVERS_PATH` и нативный Vulkan ICD при наличии.
-- `noctalia-terminal` нужен потому, что `runInTerminal` вызывает `$TERMINAL` напрямую; обёртка работает через `noctalia-exec` и предпочитает `$PREFIX/bin/foot`, затем `kitty`, затем `ghostty`. `kitty` и `ghostty` — сборки X11 и требуют вложенного Xwayland, а `foot` нативный для Wayland; без них обёртка завершается с `noctalia-terminal: no supported terminal found in $PREFIX/bin`. `mango-integrate` возвращает прямым записям терминалов исходный вид, направляет Firefox на `$PREFIX/bin/mango-firefox` и создаёт конфиги терминалов.
+- `noctalia-terminal` нужен потому, что `runInTerminal` вызывает `$TERMINAL` напрямую; обёртка работает через `noctalia-exec` и предпочитает `$PREFIX/bin/foot`, затем `kitty`, затем `ghostty`. `kitty` и `ghostty` — сборки X11 и требуют вложенного Xwayland, а `foot` нативный для Wayland; без них обёртка завершается с `noctalia-terminal: no supported terminal found in $PREFIX/bin`. Для пути по умолчанию установите `foot`: `apt install foot`. `mango-integrate` возвращает прямым записям терминалов исходный вид, направляет Firefox на `$PREFIX/bin/mango-firefox` и создаёт конфиги терминалов.
 
 ```bash
 grep -H '^Exec=' "$PREFIX/share/applications/foot.desktop" \
@@ -119,22 +124,29 @@ command -v foot kitty ghostty firefox fish
 
 ## 8. Проверка
 
-- `./install-noctalia-termux.sh --check` печатает строки `OK:` и `FAIL:` и проверяет rootfs, загрузчик, `libstdc++`, приватные ссылки, манифест EGL, Vulkan ICD, `libxml2.so.2`, лаунчеры и их побайтовую идентичность, `noctalia-exec`, нативный `XDG_DATA_DIRS`, `runtime.env` и `mango-integrate --check`.
+- `./install-noctalia-termux.sh --check` печатает строки `OK:` и `FAIL:` и проверяет rootfs, загрузчик, `libstdc++`, приватные ссылки, ссылки на ресурсы, манифест EGL, Vulkan ICD при наличии, `libxml2.so.2`, лаунчеры и их побайтовую идентичность, `noctalia-exec`, нативный `XDG_DATA_DIRS`, `runtime.env`, подключение автозапуска `mics.conf` и `mango-integrate --check`.
+- Отсутствие `libdisplay-info.so.2` или `libvulkan_freedreno.so` в rootfs выводится как необязательное предупреждение, а не ошибка: Noctalia использует EGL, а `noctalia-exec` передаёт дочерним процессам нативный Vulkan.
 - `mango-integrate --check` только читает файлы и завершается с ненулевым кодом при отсутствии обёрток или патченных записей. Отдельная проверка `./install-noctalia-termux.sh --check` сообщает об отсутствии `patchelf` как `FAIL: patchelf not found (patched fallback unavailable)`; прямой режим работает и без него.
 - `"$PREFIX/bin/noctalia" --version` печатает установленную версию без запущенной сессии, а `pgrep -af` должен показывать один нативный процесс `noctalia` или `noctalia-native` и не показывать `proot`.
+- В Termux:X11 появляется панель Noctalia, а `noctalia msg panel-toggle launcher` переключает лаунчер. Если этого не происходит, проверьте, что процесс унаследовал `MANGO_INSTANCE_SIGNATURE`.
 
 ```bash
 ./install-noctalia-termux.sh --check
 mango-integrate --check
 "$PREFIX/bin/noctalia" --version
 pgrep -af '/usr/bin/noctalia|libexec/mango-termux/noctalia-native'
+ls -l "$PREFIX/glibc/lib/assets" "$PREFIX/glibc/share/noctalia/assets"
 ```
 
 ## 9. Устранение неполадок
 
 - `FAIL: no usable Noctalia rootfs found` означает, что ни одно дерево не прошло проверку: укажите `--rootfs`, задайте `NOCTALIA_ROOTFS` или разрешите автоматический bootstrap.
-- `FAIL: rootfs is not usable` и `FAIL: NOCTALIA_ROOTFS is not usable` означают отсутствие обязательного файла rootfs; `FAIL: Termux loader missing` — отсутствие загрузчика по пути `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`.
+- `FAIL: rootfs is not usable` и `FAIL: NOCTALIA_ROOTFS is not usable` означают отсутствие обязательного файла rootfs. `FAIL: Termux loader missing` или `Termux glibc loader not found` означают отсутствие `glibc-runner`; выполните `apt install glibc-runner` и повторите запуск установщика.
 - `FAIL: private link missing`, `FAIL: runtime env missing or stale`, отсутствующий лаунчер, неполное приватное окружение и ошибки EGL/GBM требуют повторного запуска установщика, при необходимости с `--force`; глобальную ссылку `libxml2.so.2` создавать нельзя. Ошибки лаунчера `missing runtime env`, `installed rootfs is not usable`, `Termux glibc loader not found` и `NOCTALIA_ROOTFS=... does not match installed rootfs` означают то же самое.
+- `fatal: could not locate library assets: fonts/noctalia-tabler.ttf and fonts/tabler.json are required` означает отсутствующие или устаревшие ссылки на ресурсы. Повторно запустите `./install-noctalia-termux.sh`; проверьте, что `$PREFIX/glibc/lib/assets` и `$PREFIX/glibc/share/noctalia/assets` указывают на `$ROOTFS/usr/share/noctalia/assets`. Для этого поиска Noctalia 5.6 игнорирует `NOCTALIA_ASSETS_DIR`.
+- Noctalia не запускается автоматически: установщик или `mango-integrate` должны оставить `exec=noctalia` в `mics.conf` и `source=./mics.conf` в `config.conf`; `--check` сообщает об отсутствующем подключении. После редактирования любого из файлов повторите установщик или `mango-integrate`.
+- Биндинги `noctalia msg` не работают: по умолчанию они не устанавливаются. Добавьте их в `config.conf` или подключаемый `binds.conf` при необходимости.
+- Предупреждения `--check` о `libdisplay-info.so.2` или `libvulkan_freedreno.so` не фатальны: Noctalia использует EGL, а `noctalia-exec` передаёт дочерним процессам нативный Vulkan. Установщик использует glob-шаблоны для библиотек Mesa, LLVM и ICU, поэтому обновление пакетов rootfs не требует правки скрипта.
 - `noctalia: another instance is already running` означает, что занята блокировка запуска без аргументов: используйте `noctalia msg ...` или перезапустите сессию; `mango-ipc` и `msg` этой блокировкой не ограничены.
 - `noctalia-terminal: no supported terminal found in $PREFIX/bin` означает, что не установлены `foot`, `kitty` или `ghostty`; установите один из них и перезапустите установщик, если обёртка отсутствует.
 - Если дочернее приложение загружает EGL или Mesa из rootfs либо падает с ошибками glibc, оно запущено не через `noctalia-exec`: проверьте `launch_apps_custom_command = "noctalia-exec $CMD"` и выполните `mango-integrate`.
@@ -150,7 +162,7 @@ tr '\0' '\n' < "/proc/$pid/environ" | grep -E 'MANGO_INSTANCE_SIGNATURE|XKB_CONF
 
 ## 10. Обновление и сброс
 
-- Пакеты rootfs обновляются командой `proot-distro login archlinuxarm -- pacman -Syu --noconfirm` — это единственное оставшееся применение `proot-distro`; затем повторно запустите установщик, который обновляет приватные библиотеки, `runtime.env`, лаунчеры и интеграцию. `mango-termux --restart` запускает новую нативную сессию и завершает оставшуюся Noctalia.
+- Пакеты rootfs обновляются командой `proot-distro login archlinuxarm -- pacman -Syu --noconfirm` — это единственное оставшееся применение `proot-distro`; затем повторно запустите установщик, который обновляет приватные библиотеки, ссылки на ресурсы, `runtime.env`, лаунчеры и интеграцию. Установщик использует glob-шаблоны для библиотек Mesa, LLVM и ICU, поэтому обновление пакетов rootfs не требует правки скрипта. `mango-termux --restart` запускает новую нативную сессию и завершает оставшуюся Noctalia.
 - Для сброса конфигурации и состояния перенесите `$HOME/.config/noctalia` и `$HOME/.local/state/noctalia` в пути с суффиксом `.bak` и перезапустите сессию; `$HOME/Walls` сохраняется, если его не нужно удалять явно.
 
 ```bash

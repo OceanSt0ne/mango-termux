@@ -42,7 +42,7 @@ die() {
 }
 
 need() {
-	command -v "$1" >/dev/null 2>&1 || die "missing '$1' (pkg install $2)"
+	command -v "$1" >/dev/null 2>&1 || die "missing '$1' (apt install $2)"
 }
 
 case "$DEST" in

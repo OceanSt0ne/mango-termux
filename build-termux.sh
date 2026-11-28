@@ -58,7 +58,7 @@ if [[ "${MANGO_SKIP_KGSL:-0}" != "1" && -e /dev/kgsl-3d0 ]]; then
 fi
 if [[ -n "$missing" ]]; then
   echo "Missing build dependencies:$missing"
-  echo "Install e.g.: pkg install clang pkg-config ninja patchelf git python-pip \\"
+  echo "Install e.g.: apt install clang pkg-config ninja patchelf git python-pip \\"
   echo "  wlroots libwayland libwayland-protocols libxkbcommon libpixman \\"
   echo "  libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \\"
   echo "  libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \\"

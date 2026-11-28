@@ -48,20 +48,27 @@ Limitations:
 - Bundled `scenefx` 0.5 sources are pre-patched; scenefx is not available as a Termux package.
 - The `wlroots` 0.20 package is required.
 - Private KGSL Mesa 27 is optional, but required for hardware GL in session clients.
+- Native Noctalia 5.6.x additionally needs `glibc-runner` (the Termux glibc loader), `proot-distro` for rootfs bootstrap and package updates, and a terminal such as `foot` for `runInTerminal`.
 
 Install the build dependencies:
 
 ```bash
-pkg install x11-repo
-pkg update
-pkg install termux-x11-nightly
-pkg install clang pkg-config ninja patchelf git python-pip \
+apt install x11-repo
+apt update
+apt install termux-x11-nightly
+apt install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
   libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \
   libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \
   littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp \
   dpkg curl
 python -m pip install meson
+```
+
+For native Noctalia, also install the loader, rootfs helper, and recommended terminal:
+
+```bash
+apt install glibc-runner proot-distro foot
 ```
 
 `mesa-dev` provides `gbm.h`; missing it is a common build error.
@@ -97,7 +104,7 @@ MANGO_SKIP_FIREFOX_FIX=1 ./build-termux.sh
 Verify the installation:
 
 - `mango -v` reports version 0.18.5.
-- Installed commands include `mango`, `mango-termux`, `mango-x11-check`, `mango-integrate`, `mango-noctalia`, `noctalia-exec`, `noctalia-terminal`, `mango-firefox`, and `mango-gpu-run`.
+- Installed commands include `mango`, `mango-termux`, `mango-x11-check`, `mango-integrate`, `noctalia`, `mango-noctalia`, `noctalia-exec`, `noctalia-terminal`, `mango-firefox`, and `mango-gpu-run`.
 - After source changes, run `./build-termux.sh` again and restart the session.
 
 ## 4. Quick Start
@@ -251,7 +258,7 @@ Xwayland:
 
 ## 8. Native Noctalia
 
-Noctalia 5.4.1 runs natively in Termux with the Termux glibc loader. The Arch rootfs supplies the Noctalia binary, Qt/Noctalia resources, and libraries. PRoot is used only for optional rootfs bootstrap and package setup, never at runtime.
+Noctalia 5.6.x runs natively in Termux with the Termux glibc loader. The Arch rootfs supplies the Noctalia binary, runtime libraries, and assets. Noctalia 5.6 is not a Qt/QML application; PRoot is used only for optional rootfs bootstrap and package setup, never at runtime.
 
 Rootfs discovery order:
 
@@ -260,13 +267,15 @@ Rootfs discovery order:
 3. `$PREFIX/var/lib/proot-distro/installed-rootfs/*`
 4. `$PREFIX/var/lib/proot-distro/containers/*/rootfs`
 
-The installer bootstraps `archlinuxarm` and Noctalia when no usable rootfs exists (network required); `--no-bootstrap` makes that an error. It:
+The installer requires `glibc-runner` and exits with an `apt install glibc-runner` hint when the loader is missing. It bootstraps `archlinuxarm` and Noctalia when no usable rootfs exists (network required); `--no-bootstrap` makes that an error. It:
 
 - builds a private runtime under `$PREFIX/libexec/mango-termux`;
 - copies required rootfs libraries into `rootfs-libs`;
 - uses `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`;
 - creates a patched fallback cache with `patchelf` when possible;
 - writes `runtime.env`;
+- links `$ROOTFS/usr/share/noctalia/assets` to `$PREFIX/glibc/lib/assets`, `$PREFIX/glibc/share/noctalia/assets`, and the private runtime equivalents; Noctalia 5.6 resolves its bundle relative to the loader, so these links are required;
+- creates `mics.conf` with `exec=noctalia` and ensures `config.conf` contains `source=./mics.conf`;
 - installs the `noctalia` and `mango-noctalia` launchers;
 - installs `noctalia-exec` and `noctalia-terminal`;
 - clears foreign IM/XKB variables and restores native XKB paths for children.
@@ -278,25 +287,26 @@ The installer bootstraps `archlinuxarm` and Noctalia when no usable rootfs exist
 ./install-noctalia-termux.sh --force --no-integrate
 ```
 
-Installer flags: `--rootfs PATH`, `--force`, `--check`, `--no-integrate`, `--bootstrap-rootfs`, `--no-bootstrap`, `--quiet`, and `-h`/`--help`. `--check` is read-only; `--force` rebuilds the private runtime.
+Installer flags: `--rootfs PATH`, `--force`, `--check`, `--no-integrate`, `--bootstrap-rootfs`, `--no-bootstrap`, `--quiet`, and `-h`/`--help`. `--check` is read-only and also verifies the asset links and the `mics.conf` autostart source; `--force` rebuilds the private runtime.
 
 `noctalia-exec` rebuilds a clean native Termux child environment. It keeps the Wayland/X11 socket, D-Bus, XDG runtime, cursor, and KGSL/Turnip overrides; drops rootfs EGL/Mesa paths and inherited `GTK_IM_MODULE`, `QT_IM_MODULE`, `SDL_IM_MODULE`, `GLFW_IM_MODULE`, `XMODIFIERS`, `INPUT_METHOD`, and `XKB_*`; and resolves `TERMINAL` to an installed terminal.
 
-`noctalia-terminal` is used because Noctalia `runInTerminal` calls `$TERMINAL` directly. It routes through `noctalia-exec` and prefers Wayland-native `foot`, then `kitty`, then `ghostty`.
+`noctalia-terminal` is used because Noctalia `runInTerminal` calls `$TERMINAL` directly. It routes through `noctalia-exec` and prefers Wayland-native `foot`, then `kitty`, then `ghostty`. Install `foot` for the default path.
 
 Noctalia settings for this port:
 
 - `launch_apps_custom_command = "noctalia-exec $CMD"`;
 - `reserve_space = true` for the top and bottom bars so client titlebars are not drawn underneath them;
-- overlay launchers may take keyboard focus; top and bottom layer bars must not steal focus from clients.
+- overlay launchers may take keyboard focus; top and bottom layer bars must not steal focus from clients;
+- no `noctalia msg` keybindings are installed by default; add optional bindings in `config.conf` or a sourced `binds.conf` if desired.
 
-The `mango-noctalia` launcher keeps the Mesa shader cache enabled for Noctalia children: it exports `MESA_SHADER_CACHE_DIR=$HOME/.cache/mesa_shader_cache_noctalia` and `MESA_SHADER_CACHE_MAX_SIZE=268435456` (256 MB), and unsets `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE`, and `MESA_GLSL_VERSION_OVERRIDE`.
+The `mango-noctalia` launcher keeps the Mesa shader cache enabled for Noctalia and its children: it exports `MESA_SHADER_CACHE_DIR=$HOME/.cache/mesa_shader_cache_noctalia` and `MESA_SHADER_CACHE_MAX_SIZE=268435456` (256 MB), and unsets `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE`, and `MESA_GLSL_VERSION_OVERRIDE`.
 
 After changes, run `mango-integrate --check` and `mango-termux --restart`.
 
 ## 9. Integrations and Helper Scripts
 
-`mango-integrate` is idempotent and normally runs from the build or launcher. It restores terminal desktop entries, patches Firefox entries and the launcher, maintains native Noctalia launchers and `env.conf` (`TERMINAL=noctalia-terminal`), and creates safe shell defaults. Backups end in `.mango-bak`.
+`mango-integrate` is idempotent and normally runs from the build or launcher. It restores terminal desktop entries, patches Firefox entries and the launcher, maintains native Noctalia launchers and `env.conf` (`TERMINAL=noctalia-terminal`), ensures `mics.conf` is sourced from `config.conf`, and creates safe shell defaults. Backups end in `.mango-bak`.
 
 Flags: `--quiet`, `--check`, `--no-firefox`, `--no-terminals`, and `-h`/`--help`.
 
@@ -314,7 +324,7 @@ Helper scripts:
 mango-integrate
 mango-integrate --check
 mango-integrate --no-firefox --quiet
-pkg install glmark2 libjpeg-turbo patchelf binutils
+apt install glmark2 libjpeg-turbo patchelf binutils
 ./termux-compat/install-benchmark-fixes.sh
 ./termux-compat/build-arch-turnip.sh
 glmark2
@@ -336,7 +346,7 @@ vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName'
 
 Common issues:
 
-- `gbm.h` missing: `pkg install mesa-dev`.
+- `gbm.h` missing: `apt install mesa-dev`.
 - Termux:X11 not reachable: open the app, run `mango-x11-check`, and read `$PREFIX/tmp/termux-x11.log`.
 - llvmpipe or no effects: install the KGSL stack, verify `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so`, then run `mango-termux --restart`.
 - FPS drop when opening windows: blur re-renders at high pass counts. Use the mobile 2K default `blur=1 blur_optimized=1 blur_params_num_passes=2` (`blur_params_radius = 4`), or disable blur entirely with `blur=0` / `blur_layer=0` and reload with `Super+R`.
@@ -345,7 +355,12 @@ Common issues:
 - An X11 app opens on the outer `:0`: make sure it inherits `DISPLAY=:1` from the Mango session, and rebuild with Xwayland enabled.
 - Firefox WebGL fails: run `mango-integrate`, then `termux-compat/install-firefox-webgl.sh`, and restart the session.
 - Noctalia has no rootfs: use `--bootstrap-rootfs` or `--rootfs`; validate with `--check`; `patchelf` is needed for the fallback binary.
-- Noctalia app shortcuts or IME are broken: launch through `noctalia-exec`, keep the native `XKB_CONFIG_ROOT`, and do not inherit rootfs IM variables.
+- `FAIL: Termux loader missing` or `Termux glibc loader not found`: install the loader with `apt install glibc-runner`, then rerun the installer.
+- `fatal: could not locate library assets`: rerun `./install-noctalia-termux.sh`; verify that `$PREFIX/glibc/lib/assets` and `$PREFIX/glibc/share/noctalia/assets` point to `$ROOTFS/usr/share/noctalia/assets`. Noctalia 5.6 ignores `NOCTALIA_ASSETS_DIR` for this lookup.
+- Noctalia does not autostart: the installer or `mango-integrate` must leave `exec=noctalia` in `mics.conf` and `source=./mics.conf` in `config.conf`; `--check` reports a missing source.
+- No `noctalia msg` keybindings work: they are not installed by default. Add optional bindings manually if wanted.
+- `--check` warnings for `libdisplay-info.so.2` or `libvulkan_freedreno.so` are non-fatal: Noctalia uses EGL, and `noctalia-exec` supplies native Vulkan to children.
+- Desktop application shortcuts or IME are broken: launch through `noctalia-exec`, keep the native `XKB_CONFIG_ROOT`, and do not inherit rootfs IM variables.
 - `vkmark` shows thousands of FPS: that is GPU submission throughput, not Termux:X11 refresh; judge smoothness visually.
 
 Rebuild and restart with `./build-termux.sh && mango-termux --restart`.

@@ -756,6 +756,51 @@ patch_mics_config() {
 	return 0
 }
 
+ensure_noctalia_autostart() {
+	local dir="$home/.config/mango"
+	local mics="$dir/mics.conf"
+	local conf="$dir/config.conf"
+	local tmp
+
+	[[ -x "$bin/noctalia" ]] || return 0
+	[[ -d "$dir" ]] || return 0
+
+	if [[ ! -f "$mics" ]]; then
+		printf 'exec=noctalia\n' >"$mics" 2>/dev/null || {
+			warn "cannot create Noctalia autostart: $mics"
+			return 0
+		}
+		info "created Noctalia autostart: $mics"
+	fi
+
+	[[ -f "$conf" ]] || return 0
+	grep -qE '^[[:space:]]*source(_optional)?[[:space:]]*=[[:space:]]*.*mics\.conf' \
+		"$conf" && return 0
+
+	tmp="$(mktemp "${conf}.tmp.XXXXXX" 2>/dev/null)" || {
+		warn "cannot create temporary file for: $conf"
+		return 0
+	}
+	if ! cp "$conf" "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot copy: $conf"
+		return 0
+	fi
+	printf '\n# Native Noctalia autostart (mics.conf)\nsource=./mics.conf\n' >>"$tmp"
+	set_mode_from "$conf" "$tmp"
+	if ! backup_once "$conf"; then
+		rm -f "$tmp"
+		return 0
+	fi
+	if ! mv "$tmp" "$conf" 2>/dev/null; then
+		rm -f "$tmp"
+		warn "cannot replace: $conf"
+		return 0
+	fi
+	info "enabled Noctalia autostart in: $conf"
+	return 0
+}
+
 patch_start_noctalia_shim() {
 	local file="$home/.config/mango/start-noctalia.sh"
 	local tmp
@@ -1180,6 +1225,7 @@ ensure_noctalia_child_command
 migrate_native_noctalia
 migrate_noctalia_walls
 patch_mics_config
+ensure_noctalia_autostart
 patch_start_noctalia_shim
 
 info "mango-integrate: firefox=${firefox_patched} patched/${firefox_skipped} skipped; terminals=${terminal_restored} restored/${terminal_skipped} skipped; configs=${configs_created} created/${configs_skipped} skipped"

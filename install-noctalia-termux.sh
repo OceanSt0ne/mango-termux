@@ -141,8 +141,8 @@ loader="$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
 
 runtime_libs=(
   "libEGL_mesa.so.0"
-  "libgallium-27*"
-  "libLLVM.so.23.1"
+  "libgallium-*"
+  "libLLVM.so.*"
   "libgbm.so.1"
   "libxml2.so.16"
   "libstdc++.so.6"
@@ -152,8 +152,8 @@ runtime_libs=(
   "libffi.so.8"
   "libSPIRV-Tools.so"
   "libsensors.so.5"
-  "libicuuc.so.78"
-  "libicudata.so.78"
+  "libicuuc.so.*"
+  "libicudata.so.*"
   "libedit.so.0"
   "libncursesw.so.6"
   "libwayland-*.so.0"
@@ -167,7 +167,7 @@ runtime_libs=(
 
 required_lib() {
   case "$1" in
-    libEGL_mesa.so.0|libgallium-27*|libLLVM.so.23.1|libgbm.so.1|libstdc++.so.6|libgcc_s.so.1)
+    libEGL_mesa.so.0|libgallium-*|libLLVM.so.*|libgbm.so.1|libstdc++.so.6|libgcc_s.so.1)
       return 0
       ;;
   esac
@@ -365,6 +365,27 @@ setup_private_runtime() {
   fi
 }
 
+setup_assets_links() {
+  local assets="$ROOTFS/usr/share/noctalia/assets"
+  if [[ ! -d $assets ]]; then
+    warn "rootfs does not provide Noctalia assets: $assets"
+    return 0
+  fi
+  # Noctalia resolves its bundle relative to the glibc loader (the direct
+  # loader is the default), so expose the rootfs assets under the Termux
+  # glibc prefix. The private fallback binary uses its own libexec prefix.
+  mkdir -p "$PREFIX/glibc/lib" "$PREFIX/glibc/share/noctalia" \
+    "$priv_dir/share/noctalia" || {
+    warn "cannot create Noctalia asset directories"
+    return 0
+  }
+  ln -sfn "$assets" "$PREFIX/glibc/lib/assets"
+  ln -sfn "$assets" "$PREFIX/glibc/share/noctalia/assets"
+  ln -sfn "$assets" "$priv_dir/assets"
+  ln -sfn "$assets" "$priv_dir/share/noctalia/assets"
+  info "linked Noctalia assets: $assets"
+}
+
 runtime_rpath() {
   local rpath="$libs_dir:$PREFIX/glibc/lib:$ROOTFS/usr/lib:$ROOTFS/lib"
   local dir
@@ -443,7 +464,7 @@ build_patched_cache() {
   local libstdcpp rpath tmp
   if ! command -v patchelf >/dev/null 2>&1; then
     warn "patchelf not found; patched fallback cache was not built"
-    warn "  install it with: pkg install patchelf"
+    warn "  install it with: apt install patchelf"
     return 0
   fi
 
@@ -1071,6 +1092,37 @@ patch_mics_config() {
   info "updated Noctalia autostart: $file"
 }
 
+ensure_mics_source() {
+  local file="$HOME/.config/mango/config.conf"
+  local tmp
+  [[ -f $file ]] || return 0
+  if grep -qE '^[[:space:]]*source(_optional)?[[:space:]]*=[[:space:]]*.*mics\.conf' \
+       "$file"; then
+    return 0
+  fi
+  tmp="$(mktemp "${file}.tmp.XXXXXX" 2>/dev/null)" || {
+    warn "cannot create temporary file for: $file"
+    return 0
+  }
+  if ! cp "$file" "$tmp"; then
+    rm -f "$tmp"
+    warn "cannot copy: $file"
+    return 0
+  fi
+  printf '\n# Native Noctalia autostart (mics.conf)\nsource=./mics.conf\n' >>"$tmp"
+  chmod --reference="$file" "$tmp" 2>/dev/null || true
+  if ! backup_once "$file"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  if ! mv "$tmp" "$file" 2>/dev/null; then
+    rm -f "$tmp"
+    warn "cannot replace: $file"
+    return 0
+  fi
+  info "enabled Noctalia autostart in: $file"
+}
+
 run_mango_integrate() {
   local integrate=""
   if [[ -x "$PREFIX/bin/mango-integrate" ]]; then
@@ -1141,6 +1193,18 @@ run_check() {
     fi
   done
 
+  if [[ -d $rootfs/usr/share/noctalia/assets ]]; then
+    for entry in "$PREFIX/glibc/lib/assets" \
+                 "$PREFIX/glibc/share/noctalia/assets" \
+                 "$priv_dir/assets" "$priv_dir/share/noctalia/assets"; do
+      if [[ -d $entry ]]; then
+        check_pass "Noctalia assets: $entry"
+      else
+        check_fail "Noctalia assets link missing: $entry"
+      fi
+    done
+  fi
+
   for pattern in "${runtime_libs[@]}"; do
     find_lib_paths "$pattern"
     if ((${#FOUND_LIB_PATHS[@]} == 0)); then
@@ -1166,7 +1230,8 @@ run_check() {
     check_fail "rootfs library missing: libEGL_mesa.so.0"
   fi
   if [[ -z $vk_lib ]]; then
-    check_fail "rootfs library missing: libvulkan_freedreno.so"
+    info "optional rootfs Vulkan ICD not found: libvulkan_freedreno.so"
+    info "  Noctalia uses EGL; noctalia-exec supplies native Vulkan to children."
   fi
 
   if [[ -n $egl_lib && -f $egl_dir/50_mesa.json ]] &&
@@ -1176,12 +1241,14 @@ run_check() {
     check_fail "EGL manifest missing or incorrect: $egl_dir/50_mesa.json"
   fi
 
-  if [[ -n $vk_lib && -f $vulkan_dir/freedreno_icd.aarch64.json ]] &&
-     grep -Fq "\"library_path\":\"$vk_lib\"" \
-       "$vulkan_dir/freedreno_icd.aarch64.json"; then
-    check_pass "Vulkan ICD: $vulkan_dir/freedreno_icd.aarch64.json"
-  else
-    check_fail "Vulkan ICD missing or incorrect: $vulkan_dir/freedreno_icd.aarch64.json"
+  if [[ -n $vk_lib ]]; then
+    if [[ -f $vulkan_dir/freedreno_icd.aarch64.json ]] &&
+       grep -Fq "\"library_path\":\"$vk_lib\"" \
+         "$vulkan_dir/freedreno_icd.aarch64.json"; then
+      check_pass "Vulkan ICD: $vulkan_dir/freedreno_icd.aarch64.json"
+    else
+      check_fail "Vulkan ICD missing or incorrect: $vulkan_dir/freedreno_icd.aarch64.json"
+    fi
   fi
 
   if [[ -n $egl_lib ]]; then
@@ -1218,6 +1285,16 @@ run_check() {
     check_pass "child wrapper executable: $PREFIX/bin/noctalia-exec"
   else
     check_fail "child wrapper missing or not executable: $PREFIX/bin/noctalia-exec"
+  fi
+
+  if [[ -f $HOME/.config/mango/mics.conf &&
+        -f $HOME/.config/mango/config.conf ]]; then
+    if grep -qE '^[[:space:]]*source(_optional)?[[:space:]]*=[[:space:]]*.*mics\.conf' \
+         "$HOME/.config/mango/config.conf"; then
+      check_pass "Noctalia autostart: mics.conf is sourced"
+    else
+      check_fail "Noctalia autostart: config.conf does not source mics.conf"
+    fi
   fi
 
   if [[ -f $PREFIX/bin/noctalia ]] &&
@@ -1283,12 +1360,17 @@ fi
 
 info "Noctalia rootfs: $ROOTFS"
 
+if [[ ! -e $loader ]]; then
+  die "Termux glibc loader missing: $loader (install it with: apt install glibc-runner)"
+fi
+
 if ((force)); then
   info "rebuilding private runtime: $priv_dir"
   rm -rf "$priv_dir"
 fi
 
 setup_private_runtime
+setup_assets_links
 build_patched_cache
 write_runtime_env
 
@@ -1300,6 +1382,7 @@ migrate_noctalia_dirs
 migrate_walls_and_settings
 patch_start_shim
 patch_mics_config
+ensure_mics_source
 install_launchers
 ensure_noctalia_child_command
 ensure_noctalia_bar_reserve

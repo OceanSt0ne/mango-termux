@@ -578,7 +578,7 @@ apply_termux_x11_input_prefs() {
 start_termux_x11() {
   if ! command -v termux-x11 >/dev/null 2>&1; then
     echo "termux-x11 not found. Install the X11 server:" >&2
-    echo "  pkg install x11-repo && pkg update && pkg install termux-x11-nightly" >&2
+    echo "  apt install x11-repo && apt update && apt install termux-x11-nightly" >&2
     return 1
   fi
   : >"$x11_log"

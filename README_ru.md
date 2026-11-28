@@ -48,20 +48,27 @@ Mango — Wayland-композитор, портированный на Termux/A
 - `scenefx` 0.5 входит в репозиторий уже пропатченным; в пакетах Termux его нет.
 - Пакет `wlroots` 0.20 обязателен.
 - Приватный KGSL Mesa 27 необязателен, но без него у клиентов сессии не будет аппаратного GL.
+- Нативной Noctalia 5.6.x дополнительно нужны `glibc-runner` (загрузчик glibc Termux), `proot-distro` для bootstrap и обновления пакетов rootfs и терминал, например `foot`, для `runInTerminal`.
 
 Установите зависимости сборки:
 
 ```bash
-pkg install x11-repo
-pkg update
-pkg install termux-x11-nightly
-pkg install clang pkg-config ninja patchelf git python-pip \
+apt install x11-repo
+apt update
+apt install termux-x11-nightly
+apt install clang pkg-config ninja patchelf git python-pip \
   wlroots libwayland libwayland-protocols libxkbcommon libpixman \
   libdrm libxcb xcb-util-wm xcb-util-renderutil xwayland \
   libglvnd-dev mesa mesa-dev mesa-vulkan-icd-freedreno \
   littlecms vulkan-loader pcre2 pango cjson libandroid-wordexp \
   dpkg curl
 python -m pip install meson
+```
+
+Для нативной Noctalia также установите загрузчик, помощник rootfs и рекомендуемый терминал:
+
+```bash
+apt install glibc-runner proot-distro foot
 ```
 
 Пакет `mesa-dev` даёт `gbm.h`; без него сборка падает с ошибкой о недостающем заголовке.
@@ -97,7 +104,7 @@ MANGO_SKIP_FIREFOX_FIX=1 ./build-termux.sh
 Проверка установки:
 
 - `mango -v` выводит версию 0.18.5.
-- Установлены команды `mango`, `mango-termux`, `mango-x11-check`, `mango-integrate`, `mango-noctalia`, `noctalia-exec`, `noctalia-terminal`, `mango-firefox` и `mango-gpu-run`.
+- Установлены команды `mango`, `mango-termux`, `mango-x11-check`, `mango-integrate`, `noctalia`, `mango-noctalia`, `noctalia-exec`, `noctalia-terminal`, `mango-firefox` и `mango-gpu-run`.
 - После изменения исходников повторите `./build-termux.sh` и перезапустите сессию.
 
 ## 4. Быстрый старт
@@ -257,7 +264,7 @@ Xwayland:
 
 ## 8. Нативная Noctalia
 
-Noctalia 5.4.1 работает в Termux нативно через glibc-загрузчик Termux. Rootfs Arch служит только источником бинарника, ресурсов и библиотек Noctalia; PRoot применяется лишь для необязательной начальной установки rootfs и пакетов, но никогда во время работы.
+Noctalia 5.6.x работает в Termux нативно через glibc-загрузчик Termux. Rootfs Arch служит только источником бинарника, библиотек и ресурсов Noctalia; Noctalia 5.6 не является Qt/QML-приложением; PRoot применяется лишь для необязательной начальной установки rootfs и пакетов, но никогда во время работы.
 
 Порядок поиска rootfs:
 
@@ -266,7 +273,7 @@ Noctalia 5.4.1 работает в Termux нативно через glibc-заг
 3. `$PREFIX/var/lib/proot-distro/installed-rootfs/*`
 4. `$PREFIX/var/lib/proot-distro/containers/*/rootfs`
 
-Если подходящего rootfs нет, установщик разворачивает `archlinuxarm` и Noctalia (нужна сеть); с `--no-bootstrap` это становится ошибкой.
+Установщику нужен `glibc-runner`; при отсутствии загрузчика он завершается с подсказкой `apt install glibc-runner`. Если подходящего rootfs нет, установщик разворачивает `archlinuxarm` и Noctalia (нужна сеть); с `--no-bootstrap` это становится ошибкой.
 
 Установщик:
 
@@ -275,19 +282,22 @@ Noctalia 5.4.1 работает в Termux нативно через glibc-заг
 - использует `$PREFIX/glibc/lib/ld-linux-aarch64.so.1`;
 - при возможности создаёт пропатченный резервный кэш через `patchelf`;
 - записывает `runtime.env`;
+- связывает `$ROOTFS/usr/share/noctalia/assets` с `$PREFIX/glibc/lib/assets`, `$PREFIX/glibc/share/noctalia/assets` и аналогичными путями приватной среды; Noctalia 5.6 ищет ресурсы относительно загрузчика, поэтому эти ссылки обязательны;
+- создаёт `mics.conf` с `exec=noctalia` и добавляет `source=./mics.conf` в `config.conf`;
 - устанавливает launcher'ы `noctalia` и `mango-noctalia`;
 - устанавливает `noctalia-exec` и `noctalia-terminal`;
 - очищает чужие переменные IM/XKB и восстанавливает нативные пути XKB для дочерних процессов.
 
 `noctalia-exec` пересобирает чистое нативное окружение Termux, сохраняет сокеты Wayland/X11, D-Bus, XDG runtime, курсор и переопределения KGSL/Turnip, отбрасывает rootfs-пути EGL/Mesa и унаследованные `GTK_IM_MODULE`, `QT_IM_MODULE`, `SDL_IM_MODULE`, `GLFW_IM_MODULE`, `XMODIFIERS`, `INPUT_METHOD`, `XKB_*`, а также разрешает `TERMINAL` в установленный терминал.
 
-`noctalia-terminal` нужен потому, что `runInTerminal` в Noctalia вызывает `$TERMINAL` напрямую; обёртка направляет запуск через `noctalia-exec` и предпочитает Wayland-нативные `foot`, затем `kitty`, затем `ghostty`.
+`noctalia-terminal` нужен потому, что `runInTerminal` в Noctalia вызывает `$TERMINAL` напрямую; обёртка направляет запуск через `noctalia-exec` и предпочитает Wayland-нативные `foot`, затем `kitty`, затем `ghostty`. Для пути по умолчанию установите `foot`.
 
 Настройки Noctalia для этого порта:
 
 - `launch_apps_custom_command = "noctalia-exec $CMD"`;
 - `reserve_space = true` для верхней и нижней панелей, чтобы заголовки окон не рисовались под ними;
-- overlay-launcher'ы могут забирать фокус клавиатуры; верхние и нижние панели не должны перехватывать фокус у клиентов.
+- overlay-launcher'ы могут забирать фокус клавиатуры; верхние и нижние панели не должны перехватывать фокус у клиентов;
+- биндинги `noctalia msg` по умолчанию не устанавливаются; при необходимости добавьте их в `config.conf` или подключаемый `binds.conf`.
 
 ```bash
 ./install-noctalia-termux.sh
@@ -296,13 +306,13 @@ Noctalia 5.4.1 работает в Termux нативно через glibc-заг
 ./install-noctalia-termux.sh --force --no-integrate
 ```
 
-Флаги установщика: `--rootfs PATH`, `--force`, `--check`, `--no-integrate`, `--bootstrap-rootfs`, `--no-bootstrap`, `--quiet`, `-h`/`--help`. Режим `--check` только читает файлы, `--force` пересобирает приватную среду. После изменений выполните `mango-integrate --check` и `mango-termux --restart`.
+Флаги установщика: `--rootfs PATH`, `--force`, `--check`, `--no-integrate`, `--bootstrap-rootfs`, `--no-bootstrap`, `--quiet`, `-h`/`--help`. Режим `--check` только читает файлы, дополнительно проверяет ссылки на ресурсы и подключение автозапуска `mics.conf`; `--force` пересобирает приватную среду. После изменений выполните `mango-integrate --check` и `mango-termux --restart`.
 
-Лаунчер `mango-noctalia` экспортирует `MESA_SHADER_CACHE_DIR`/`MESA_SHADER_CACHE_MAX_SIZE` (кэш в `$HOME/.cache/mesa_shader_cache_noctalia`, 256МБ) и снимает `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE`, `MESA_GLSL_VERSION_OVERRIDE`, чтобы кэш шейдеров Mesa сохранялся между запусками Noctalia.
+Лаунчер `mango-noctalia` экспортирует `MESA_SHADER_CACHE_DIR`/`MESA_SHADER_CACHE_MAX_SIZE` (кэш в `$HOME/.cache/mesa_shader_cache_noctalia`, 256МБ) и снимает `MESA_SHADER_CACHE_DISABLE`, `MESA_GLSL_CACHE_DISABLE`, `MESA_GLSL_VERSION_OVERRIDE`, чтобы кэш шейдеров Mesa сохранялся между запусками Noctalia и её дочерних процессов.
 
 ## 9. Интеграции и вспомогательные скрипты
 
-`mango-integrate` идемпотентен и обычно запускается из сборки и launcher. Он восстанавливает desktop-файлы терминалов, патчит записи и launcher Firefox, поддерживает launcher'ы нативной Noctalia и `env.conf` (`TERMINAL=noctalia-terminal`), создаёт безопасные настройки shell. Резервные копии получают суффикс `.mango-bak`.
+`mango-integrate` идемпотентен и обычно запускается из сборки и launcher. Он восстанавливает desktop-файлы терминалов, патчит записи и launcher Firefox, поддерживает launcher'ы нативной Noctalia и `env.conf` (`TERMINAL=noctalia-terminal`), подключает `mics.conf` из `config.conf` и создаёт безопасные настройки shell. Резервные копии получают суффикс `.mango-bak`.
 
 Флаги: `--quiet`, `--check`, `--no-firefox`, `--no-terminals`, `-h`/`--help`.
 
@@ -320,7 +330,7 @@ Noctalia 5.4.1 работает в Termux нативно через glibc-заг
 mango-integrate
 mango-integrate --check
 mango-integrate --no-firefox --quiet
-pkg install glmark2 libjpeg-turbo patchelf binutils
+apt install glmark2 libjpeg-turbo patchelf binutils
 ./termux-compat/install-benchmark-fixes.sh
 ./termux-compat/build-arch-turnip.sh
 glmark2
@@ -342,7 +352,7 @@ vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName'
 
 Типичные проблемы:
 
-- Нет `gbm.h`: установите `pkg install mesa-dev`.
+- Нет `gbm.h`: установите `apt install mesa-dev`.
 - Termux:X11 недоступен: откройте приложение, выполните `mango-x11-check`, прочитайте `$PREFIX/tmp/termux-x11.log`.
 - llvmpipe или отсутствие эффектов: установите стек KGSL, проверьте `$PREFIX/opt/mesa-kgsl/lib/dri/kgsl_dri.so` и перезапустите сессию через `mango-termux --restart`.
 - FPS проседает при открытии окон: отключите размытие (`blur=0`) или снизьте `blur_params_num_passes` до ≤2 с `blur_optimized=1` (рекомендуемый мобильный профиль для 2K).
@@ -351,6 +361,11 @@ vulkaninfo --summary 2>/dev/null | grep -E 'deviceName|driverName'
 - X11-приложение открывается на внешнем `:0`: оно должно наследовать `DISPLAY=:1` от сессии Mango; пересоберите проект с включённым Xwayland.
 - Firefox WebGL: выполните `mango-integrate`, затем `termux-compat/install-firefox-webgl.sh` и перезапустите сессию.
 - Noctalia: при отсутствии rootfs используйте `--bootstrap-rootfs` или `--rootfs`; проверяйте через `--check`; для резервного бинарника нужен `patchelf`.
+- `FAIL: Termux loader missing` или `Termux glibc loader not found`: установите загрузчик командой `apt install glibc-runner` и повторите запуск установщика.
+- `fatal: could not locate library assets`: повторно запустите `./install-noctalia-termux.sh`; проверьте, что `$PREFIX/glibc/lib/assets` и `$PREFIX/glibc/share/noctalia/assets` указывают на `$ROOTFS/usr/share/noctalia/assets`. Для этого поиска Noctalia 5.6 игнорирует `NOCTALIA_ASSETS_DIR`.
+- Noctalia не запускается автоматически: установщик или `mango-integrate` должны оставить `exec=noctalia` в `mics.conf` и `source=./mics.conf` в `config.conf`; `--check` сообщает об отсутствующем подключении.
+- Биндинги `noctalia msg` не работают: по умолчанию они не устанавливаются. Добавьте их вручную при необходимости.
+- Предупреждения `--check` о `libdisplay-info.so.2` или `libvulkan_freedreno.so` не фатальны: Noctalia использует EGL, а `noctalia-exec` передаёт дочерним процессам нативный Vulkan.
 - Ярлыки приложений или ввод в Noctalia не работают: запускайте через `noctalia-exec`, сохраняйте нативный `XKB_CONFIG_ROOT` и не наследуйте IM-переменные rootfs.
 - `vkmark` показывает тысячи FPS: это пропускная способность отправки GPU, а не частота обновления Termux:X11; плавность оценивайте визуально.
 
