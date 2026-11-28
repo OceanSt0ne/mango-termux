@@ -195,6 +195,13 @@ if [[ "$renderer" == "turnip" || "$renderer" == "zink" ]]; then
     export MESA_LOADER_DRIVER_OVERRIDE=kgsl
     export GALLIUM_DRIVER=kgsl
 
+    # Keep hardware rendering on KGSL/Zink while avoiding X11 swapchain and
+    # cursor pathologies on Adreno: disable DRM modifiers negotiation (KGSL
+    # buffers do not expose useful modifiers) and software cursors so no
+    # extra cursor buffer competes for the 4-slot swapchain.
+    export WLR_DRM_NO_MODIFIERS=1
+    export WLR_NO_HARDWARE_CURSORS=1
+
     egl_vendor="$kgsl_root/share/glvnd/egl_vendor.d/50_mesa.json"
     if [[ -f "$egl_vendor" ]]; then
       export __EGL_VENDOR_LIBRARY_FILENAMES="$egl_vendor"
@@ -390,6 +397,24 @@ kill_leftover_noctalia() {
     done || true
 }
 
+# Kill a leftover Termux:X11 server on the restart path so a fresh display is
+# started. termux-x11 is an Android app, so this is attempted non-fatally; the
+# caller falls back to reusing a live server if the kill is not permitted.
+kill_leftover_termux_x11() {
+  local display="${1:-:0}"
+  local pid
+  pid="$(ps -eo pid=,args= 2>/dev/null |
+    grep -E "termux-x11[[:space:]]+${display}([[:space:]]|$)" |
+    awk '{print $1}' | head -1)"
+  [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || return 0
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  kill -9 "$pid" 2>/dev/null || true
+}
+
 cleanup_stale_wayland
 
 # Return the IPC socket of a healthy running mango, if any. Dead sockets from
@@ -509,9 +534,11 @@ if ipc="$(find_running_mango)"; then
 fi
 
 # On --restart, clear any Noctalia left over from the replaced compositor
-# before starting a new session, so panels do not duplicate.
+# before starting a new session, so panels do not duplicate. Also stop the
+# Termux:X11 server so the new compositor gets a fresh display.
 if [[ "${MANGO_RESTART:-0}" == "1" ]]; then
   kill_leftover_noctalia
+  kill_leftover_termux_x11 "${MANGO_X11_DISPLAY:-${DISPLAY:-:0}}"
 fi
 
 # Integrate before starting a new session. On --restart this runs after the old
@@ -669,4 +696,15 @@ if [[ "$bin" == "$priv_bin" ]]; then
   unset LD_LIBRARY_PATH
 fi
 persist_session_env
+if [[ "${MANGO_RESTART:-0}" == "1" ]]; then
+  # Launch the restarted compositor detached from the terminal: no stdin, no
+  # controlling terminal, output to a log file. This prevents the restart from
+  # blocking the shell and keeps Ctrl+C in the terminal from killing mango.
+  nohup "$bin" "$@" < /dev/null \
+    >>"$prefix/tmp/mango-session.log" 2>&1 &
+  mango_restart_pid=$!
+  disown "$mango_restart_pid" 2>/dev/null || true
+  echo "mango restarted (pid $mango_restart_pid); log: $prefix/tmp/mango-session.log" >&2
+  exit 0
+fi
 exec "$bin" "$@"

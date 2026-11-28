@@ -247,6 +247,15 @@ ls -l "$PREFIX/glibc/lib/assets" "$PREFIX/glibc/share/noctalia/assets"
 - `--check` warnings for `libdisplay-info.so.2` or `libvulkan_freedreno.so` are non-fatal: Noctalia uses
   EGL, and `noctalia-exec` supplies native Vulkan to children. The installer uses globs for Mesa, LLVM,
   and ICU libraries, so rootfs package updates do not require editing it.
+- A 4K Noctalia wallpaper (`3840x2160`) can consume all four compositor swapchain slots at startup,
+  especially with an animated wallpaper or continuous damage, and MangoWM logs
+  `No free output buffer slot`. The compositor now skips frames and waits for the X11 Present event
+  instead of looping, but you should still keep the wallpaper lightweight:
+  - use a static (non-animated) wallpaper scaled to the output resolution;
+  - keep `blur=1 blur_optimized=1 blur_params_num_passes <= 2` in `$HOME/.config/mango/config.conf`;
+  - avoid Noctalia animations and live wallpapers on 4K;
+  - after changing the wallpaper, run `mango-termux --restart` so MangoWM recreates the output
+    swapchain at the correct size.
 - `noctalia: another instance is already running` means the instance lock is held: use `noctalia msg ...`
   or restart the session; `mango-ipc` and `msg` are not blocked by it.
 - `noctalia-terminal: no supported terminal found in $PREFIX/bin` means no `foot`, `kitty`, or `ghostty`

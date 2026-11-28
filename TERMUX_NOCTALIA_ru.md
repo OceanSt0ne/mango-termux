@@ -147,6 +147,11 @@ ls -l "$PREFIX/glibc/lib/assets" "$PREFIX/glibc/share/noctalia/assets"
 - Noctalia не запускается автоматически: установщик или `mango-integrate` должны оставить `exec=noctalia` в `mics.conf` и `source=./mics.conf` в `config.conf`; `--check` сообщает об отсутствующем подключении. После редактирования любого из файлов повторите установщик или `mango-integrate`.
 - Биндинги `noctalia msg` не работают: по умолчанию они не устанавливаются. Добавьте их в `config.conf` или подключаемый `binds.conf` при необходимости.
 - Предупреждения `--check` о `libdisplay-info.so.2` или `libvulkan_freedreno.so` не фатальны: Noctalia использует EGL, а `noctalia-exec` передаёт дочерним процессам нативный Vulkan. Установщик использует glob-шаблоны для библиотек Mesa, LLVM и ICU, поэтому обновление пакетов rootfs не требует правки скрипта.
+- 4K-обои Noctalia (`3840x2160`) могут занять все четыре слота swapchain композитора при старте, особенно при анимированных обоях или непрерывном ущербе поверхности, и MangoWM пишет в лог `No free output buffer slot`. Композитор теперь пропускает кадры и ждёт события X11 Present вместо зацикливания, но обои всё равно стоит сделать лёгкими:
+  - используйте статические (не анимированные) обои, масштабированные под разрешение экрана;
+  - оставьте `blur=1 blur_optimized=1 blur_params_num_passes <= 2` в `$HOME/.config/mango/config.conf`;
+  - избегайте анимаций и живых обоев в Noctalia при 4K;
+  - после смены обоев выполните `mango-termux --restart`, чтобы MangoWM пересоздал swapchain вывода нужного размера.
 - `noctalia: another instance is already running` означает, что занята блокировка запуска без аргументов: используйте `noctalia msg ...` или перезапустите сессию; `mango-ipc` и `msg` этой блокировкой не ограничены.
 - `noctalia-terminal: no supported terminal found in $PREFIX/bin` означает, что не установлены `foot`, `kitty` или `ghostty`; установите один из них и перезапустите установщик, если обёртка отсутствует.
 - Если дочернее приложение загружает EGL или Mesa из rootfs либо падает с ошибками glibc, оно запущено не через `noctalia-exec`: проверьте `launch_apps_custom_command = "noctalia-exec $CMD"` и выполните `mango-integrate`.

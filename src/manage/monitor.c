@@ -1463,18 +1463,19 @@ void handle_output_frame(struct wl_listener *listener, void *data) {
 	committed = mango_scene_output_commit(m->scene_output, &m->pending);
 	if (!committed) {
 		/*
-		 * The output commit failed or was skipped. On X11 this usually means
-		 * the swapchain is full because Present is still pending. Do not send
-		 * frame-done or re-arm the frame loop here: clients would believe the
-		 * frame was presented and keep rendering at event-loop speed while the
-		 * display is limited by Present.
+		 * The output commit failed or was skipped. On the Termux:X11 backend
+		 * this usually means the swapchain is full because a Present is still
+		 * pending and no buffer slot has been released yet. Do NOT re-arm the
+		 * frame loop here: wlr_output_schedule_frame() would spin the event
+		 * loop while every slot stays acquired, logging
+		 * "No free output buffer slot" and pinning the CPU at 100 %.
 		 *
-		 * A failed commit does not always leave a backend Present/Idle event
-		 * behind, so explicitly request a normal frame event as a retry. This
-		 * is a no-op while a frame is already pending; in that case the
-		 * backend Present/Idle event remains the retry path.
+		 * The X11 backend emits a Present complete/idle event (see
+		 * handle_x11_present_event) which calls wlr_output_send_frame(); that
+		 * re-enters this callback and retries the commit once a swapchain
+		 * slot has been released. That Present-driven path is the correct
+		 * retry mechanism and keeps hardware rendering on KGSL/Zink intact.
 		 */
-		wlr_output_schedule_frame(m->wlr_output);
 		return;
 	}
 
